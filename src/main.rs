@@ -1,12 +1,15 @@
+use std::i16;
+
+use anyhow::Ok;
 use clap::Parser;
 use cpal::{
     traits::{DeviceTrait},
 };
 
-use crate::audio::{
+use crate::{audio::{
     capture::init_audio_capture,
-    devices::{list_input_devices, select_device_by_index},
-};
+    devices::{list_input_devices, select_device_by_index}, utils::wav_to_f32,
+}, stt::whisper::transcribe};
 
 mod audio;
 mod stt;
@@ -46,6 +49,10 @@ fn main() -> Result<(), anyhow::Error> {
     std::thread::sleep(std::time::Duration::from_secs(10));
     drop(stream);
     writer.lock().unwrap().take().unwrap().finalize()?;
+
+    let (audio_data, sample_rate) = wav_to_f32("recorded.wav")?;
+
+    transcribe(&audio_data, sample_rate as usize);
 
     Ok(())
 }
