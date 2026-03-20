@@ -3,3 +3,4 @@
 *.wav
 
 models/*
+transcription.txt

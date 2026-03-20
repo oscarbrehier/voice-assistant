@@ -1,7 +1,5 @@
 use std::{
-    fs::File,
-    io::BufWriter,
-    sync::{Arc, Mutex},
+    collections::VecDeque, fs::File, io::BufWriter, sync::{Arc, Mutex}
 };
 
 use cpal::{
@@ -10,6 +8,7 @@ use cpal::{
 };
 
 type WavWriterHandle = Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>;
+pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
 
 fn write_input_data<T, U>(input: &[T], writer: &WavWriterHandle)
 where
@@ -48,14 +47,10 @@ fn wav_spec_from_config(config: &cpal::SupportedStreamConfig) -> hound::WavSpec 
 pub fn init_audio_capture(
     device: &Device,
     config: SupportedStreamConfig,
-    output_path: &str,
-) -> Result<(Stream, WavWriterHandle), anyhow::Error> {
-    let spec = wav_spec_from_config(&config);
+) -> Result<(Stream, AudioBuffer), anyhow::Error> {
 
-    let writer = hound::WavWriter::create(output_path, spec)?;
-    let writer = Arc::new(Mutex::new(Some(writer)));
-
-    let writer_2 = writer.clone();
+    let audio_buffer = Arc::new(Mutex::new(VecDeque::new()));
+    let audio_buffer_clone = audio_buffer.clone();
 
     let err_fn = move |err| {
         eprintln!("An error occurred during stream: {err}");
@@ -64,25 +59,37 @@ pub fn init_audio_capture(
     let stream = match config.sample_format() {
         cpal::SampleFormat::I8 => device.build_input_stream(
             &config.into(),
-            move |data, _: &_| write_input_data::<i8, i8>(data, &writer_2),
+            move |data: &[i8], _: &_| {
+                let mut buffer = audio_buffer_clone.lock().unwrap();
+                buffer.extend(data.iter().map(|&sample| sample as f32 / 128.0));
+            },
             err_fn,
             None,
         )?,
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config.into(),
-            move |data, _: &_| write_input_data::<i16, i16>(data, &writer_2),
+            move |data: &[i16], _: &_| {
+                let mut buffer = audio_buffer_clone.lock().unwrap();
+                buffer.extend(data.iter().map(|&sample| sample as f32 / 32768.0));
+            },
             err_fn,
             None,
         )?,
         cpal::SampleFormat::I32 => device.build_input_stream(
             &config.into(),
-            move |data, _: &_| write_input_data::<i32, i32>(data, &writer_2),
+            move |data: &[i32], _: &_| {
+                let mut buffer = audio_buffer_clone.lock().unwrap();
+                buffer.extend(data.iter().map(|&sample| sample as f32 / 32768.0));
+            },
             err_fn,
             None,
         )?,
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
-            move |data, _: &_| write_input_data::<f32, f32>(data, &writer_2),
+            move |data: &[f32], _: &_| {
+                let mut buffer = audio_buffer_clone.lock().unwrap();
+                buffer.extend(data.iter().copied());
+            },
             err_fn,
             None,
         )?,
@@ -95,5 +102,5 @@ pub fn init_audio_capture(
 
     stream.play()?;
 
-    Ok((stream, writer))
+    Ok((stream, audio_buffer))
 }
