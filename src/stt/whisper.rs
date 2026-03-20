@@ -14,7 +14,11 @@ impl WhisperModel {
         Ok(Self { context })
     }
 
-    pub fn transcribe(&self, audio_data: &[f32], sample_rate: usize) -> Result<String, anyhow::Error> {
+    pub fn transcribe(
+        &self,
+        audio_data: &[f32],
+        sample_rate: usize,
+    ) -> Result<String, anyhow::Error> {
         let audio_16khz = if sample_rate != 16000 {
             resample_to_16khz(audio_data, sample_rate)
         } else {
@@ -27,6 +31,14 @@ impl WhisperModel {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+
+        params.set_initial_prompt(
+            "Set timer. Play music. Get weather. Stop. What's the time. Turn on lights.",
+        );
+
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
+        params.set_no_speech_thold(0.6);
 
         params.set_language(Some("en"));
         params.set_suppress_nst(true);

@@ -58,3 +58,10 @@ pub fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
         samples.to_vec()
     }
 }
+
+pub fn has_speech(audio: &[f32], threshold: f32) -> bool {
+    let sum_squares: f32 = audio.iter().map(|&s| s * s).sum();
+    let rms = (sum_squares / audio.len() as f32).sqrt();
+
+    rms > threshold
+}

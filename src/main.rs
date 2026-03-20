@@ -18,7 +18,7 @@ use crate::{
     audio::{
         capture::init_audio_capture,
         devices::{list_input_devices, select_device_by_index},
-        utils::to_mono,
+        utils::{has_speech, to_mono},
     },
     stt::whisper::{WhisperModel, transcribe},
 };
@@ -36,6 +36,9 @@ struct Opt {
 type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 
 fn main() -> Result<(), anyhow::Error> {
+
+    let keywords = vec!["play music", "play", "play song", "music"];
+
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
 
@@ -72,7 +75,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
-    let model = WhisperModel::new("models/ggml-tiny-q8_0.bin")?;
+    let model = WhisperModel::new("models/ggml-base-q8_0.bin")?;
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, config).expect("failed to init audio capture");
@@ -84,10 +87,16 @@ fn main() -> Result<(), anyhow::Error> {
         while let Ok(chunk) = rx.recv() {
             match model.transcribe(&chunk, sample_rate_for_thread) {
                 Ok(transcription) => {
-                    let trimmed = transcription.trim();
+                    let mut trimmed = transcription.trim().to_string();
 
                     if !trimmed.is_empty() {
                         let mut last = last_transcription_clone.lock().unwrap();
+
+                        for keyword in &keywords {
+                            if trimmed.contains(keyword) {
+                                trimmed.push_str(" (keyword detected)");
+                            }
+                        }
 
                         if trimmed != *last {
                             if let Ok(mut file) = OpenOptions::new()
@@ -97,7 +106,7 @@ fn main() -> Result<(), anyhow::Error> {
                             {
                                 writeln!(file, "{}", trimmed).ok();
                             }
-    
+
                             *last = trimmed.to_string();
                         }
                     }
@@ -107,10 +116,10 @@ fn main() -> Result<(), anyhow::Error> {
         }
     });
 
-    let chunk_duration_spec = 1;
+    let chunk_duration_spec = 1.3;
     let overlap_duration = 0.3;
 
-    let chunk_size = sample_rate * channels * chunk_duration_spec;
+    let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
 
     while running.load(Ordering::SeqCst) {
@@ -119,7 +128,6 @@ fn main() -> Result<(), anyhow::Error> {
         let mut queue = audio_buffer.lock().unwrap();
 
         if queue.len() >= chunk_size {
-
             let drain_size = chunk_size - overlap_size;
             let chunk: Vec<f32> = queue.drain(..drain_size).collect();
 
@@ -132,8 +140,10 @@ fn main() -> Result<(), anyhow::Error> {
 
             let mono = to_mono(&full_chunk, channels);
 
-            if tx.send(mono).is_err() {
-                break;
+            if has_speech(&mono, 0.02) {
+                if tx.send(mono).is_err() {
+                    break;
+                }
             }
         }
     }
