@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
-    fs::{File, OpenOptions},
-    io::{BufWriter, Write},
+    fs::OpenOptions,
+    io::Write,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -18,9 +18,9 @@ use crate::{
     audio::{
         capture::init_audio_capture,
         devices::{list_input_devices, select_device_by_index},
-        utils::{has_speech, to_mono},
+        utils::{has_speech, resample_to_16khz, to_mono},
     },
-    stt::whisper::{WhisperModel, transcribe},
+    stt::stt_service::STTService,
 };
 
 mod audio;
@@ -36,6 +36,7 @@ struct Opt {
 type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 
 fn main() -> Result<(), anyhow::Error> {
+    let mut stt = STTService::new()?;
 
     let keywords = vec!["play music", "play", "play song", "music"];
 
@@ -75,8 +76,6 @@ fn main() -> Result<(), anyhow::Error> {
 
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
-    let model = WhisperModel::new("models/ggml-base-q8_0.bin")?;
-
     let (stream, audio_buffer) =
         init_audio_capture(&device, config).expect("failed to init audio capture");
 
@@ -85,7 +84,9 @@ fn main() -> Result<(), anyhow::Error> {
 
     let transcription_handle = thread::spawn(move || {
         while let Ok(chunk) = rx.recv() {
-            match model.transcribe(&chunk, sample_rate_for_thread) {
+            let resampled = resample_to_16khz(&chunk, sample_rate_for_thread);
+
+            match stt.transcribe(&resampled) {
                 Ok(transcription) => {
                     let mut trimmed = transcription.trim().to_string();
 
@@ -99,6 +100,8 @@ fn main() -> Result<(), anyhow::Error> {
                         }
 
                         if trimmed != *last {
+                            println!("{}", trimmed);
+
                             if let Ok(mut file) = OpenOptions::new()
                                 .create(true)
                                 .append(true)
@@ -116,8 +119,8 @@ fn main() -> Result<(), anyhow::Error> {
         }
     });
 
-    let chunk_duration_spec = 1.3;
-    let overlap_duration = 0.3;
+    let chunk_duration_spec = 2;
+    let overlap_duration = 0.5;
 
     let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
@@ -140,7 +143,7 @@ fn main() -> Result<(), anyhow::Error> {
 
             let mono = to_mono(&full_chunk, channels);
 
-            if has_speech(&mono, 0.02) {
+            if has_speech(&mono, 0.005) {
                 if tx.send(mono).is_err() {
                     break;
                 }
