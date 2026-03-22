@@ -19,7 +19,9 @@ class STTService:
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6,
-                condition_on_previous_text=False,
+                condition_on_previous_text=True,
+                vad_filter=False,
+                word_timestamps=False
             )
             
             transcription_parts = []
@@ -93,7 +95,7 @@ class STTService:
 
 if __name__ == "__main__":
     try:
-        service = STTService(model="small.en", device="cpu")
+        service = STTService(model="distil-medium.en", device="cuda")
         service.run()
     except Exception as e:
         print(f"error: {e}", file=sys.stderr, flush=True)

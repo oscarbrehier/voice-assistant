@@ -120,7 +120,7 @@ fn main() -> Result<(), anyhow::Error> {
     });
 
     let chunk_duration_spec = 2;
-    let overlap_duration = 0.5;
+    let overlap_duration = 0.25;
 
     let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
