@@ -15,16 +15,17 @@ use clap::Parser;
 use cpal::traits::DeviceTrait;
 
 use crate::{
-    audio::{
+    actions::Action, audio::{
         capture::init_audio_capture,
         devices::{list_input_devices, select_device_by_index},
         utils::{has_speech, resample_to_16khz, to_mono},
-    },
-    stt::stt_service::STTService,
+    }, commands::CommandMatcher, stt::stt_service::STTService
 };
 
 mod audio;
 mod stt;
+mod actions;
+mod commands;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -38,7 +39,7 @@ type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 fn main() -> Result<(), anyhow::Error> {
     let mut stt = STTService::new()?;
 
-    let keywords = vec!["play music", "play", "play song", "music"];
+    let command_matcher = CommandMatcher::from_file("config/commands.json")?;
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -93,10 +94,16 @@ fn main() -> Result<(), anyhow::Error> {
                     if !trimmed.is_empty() {
                         let mut last = last_transcription_clone.lock().unwrap();
 
-                        for keyword in &keywords {
-                            if trimmed.contains(keyword) {
-                                trimmed.push_str(" (keyword detected)");
-                            }
+                        // for keyword in &keywords {
+                        //     if trimmed.contains(keyword) {
+                        //         trimmed.push_str(" (keyword detected)");
+                        //     }
+                        // }
+
+                        let action = command_matcher.match_command(&trimmed);
+
+                        if action != Action::Unknown {
+                            trimmed.push_str(&format!("command: {:?}", action));
                         }
 
                         if trimmed != *last {

@@ -1,0 +1,14 @@
+{
+	"static_commands": [
+		{
+			"action": "PlayMusic",
+			"triggers": [
+				"play music",
+				"play song",
+				"start song",
+				"play some music"
+			]
+		}
+	],
+	"dynamic_commands": []
+}
