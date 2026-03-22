@@ -1,14 +1,16 @@
 {
-	"static_commands": [
-		{
-			"action": "PlayMusic",
-			"triggers": [
-				"play music",
-				"play song",
-				"start song",
-				"play some music"
-			]
-		}
-	],
-	"dynamic_commands": []
+  "static_commands": [
+    {
+      "action": "PlayMusic",
+      "triggers": ["play music", "play song", "start song", "play some music"]
+    }
+  ],
+  "dynamic_commands": [
+    {
+      "action": "OpenApp",
+      "patterns": ["open {}", "launch {}", "start {}"],
+      "regex": "^(open|launch|start)\\s+(\\w+)$",
+      "arg_type": "string"
+    }
+  ]
 }

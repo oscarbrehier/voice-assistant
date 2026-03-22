@@ -15,7 +15,7 @@ use clap::Parser;
 use cpal::traits::DeviceTrait;
 
 use crate::{
-    actions::Action, audio::{
+    actions::{Action, execute_action}, audio::{
         capture::init_audio_capture,
         devices::{list_input_devices, select_device_by_index},
         utils::{has_speech, resample_to_16khz, to_mono},
@@ -37,6 +37,8 @@ struct Opt {
 type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 
 fn main() -> Result<(), anyhow::Error> {
+    dotenv::dotenv().ok();
+
     let mut stt = STTService::new()?;
 
     let command_matcher = CommandMatcher::from_file("config/commands.json")?;
@@ -89,21 +91,18 @@ fn main() -> Result<(), anyhow::Error> {
 
             match stt.transcribe(&resampled) {
                 Ok(transcription) => {
-                    let mut trimmed = transcription.trim().to_string();
+                    let mut trimmed = transcription.trim().to_lowercase().to_string();
 
                     if !trimmed.is_empty() {
                         let mut last = last_transcription_clone.lock().unwrap();
 
-                        // for keyword in &keywords {
-                        //     if trimmed.contains(keyword) {
-                        //         trimmed.push_str(" (keyword detected)");
-                        //     }
-                        // }
-
                         let action = command_matcher.match_command(&trimmed);
+
+                        println!("action: {:?}", action);
 
                         if action != Action::Unknown {
                             trimmed.push_str(&format!("command: {:?}", action));
+                            let _ = execute_action(action);
                         }
 
                         if trimmed != *last {
