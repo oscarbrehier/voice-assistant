@@ -10,7 +10,7 @@ pub struct STTService {
 impl STTService {
     pub fn new() -> anyhow::Result<Self> {
         let mut process = Command::new("python")
-            .arg("stt_service.py")
+            .arg("python/stt_service.py")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

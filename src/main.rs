@@ -16,9 +16,7 @@ use cpal::traits::DeviceTrait;
 
 use crate::{
     actions::{Action, execute_action}, audio::{
-        capture::init_audio_capture,
-        devices::{list_input_devices, select_device_by_index},
-        utils::{has_speech, resample_to_16khz, to_mono},
+        capture::init_audio_capture, devices::{list_input_devices, select_device_by_index}, tts::speak, utils::{has_speech, resample_to_16khz, to_mono}
     }, commands::CommandMatcher, stt::stt_service::STTService
 };
 
@@ -44,7 +42,7 @@ enum State {
 
 fn main() -> Result<(), anyhow::Error> {
     dotenv::dotenv().ok();
-
+    
     let mut stt = STTService::new()?;
 
     let command_matcher = CommandMatcher::from_file("config/commands.json")?;
@@ -90,6 +88,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let last_transcription = Arc::new(Mutex::new(String::new()));
     let last_transcription_clone = last_transcription.clone();
+
 
     let transcription_handle = thread::spawn(move || {
         while let Ok(chunk) = rx.recv() {

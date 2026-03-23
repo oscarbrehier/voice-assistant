@@ -1,8 +1,10 @@
 target/
+models/
+voices/
 
 *.wav
+*.mp3
 
-models/
 transcription.txt
 
 *.env
