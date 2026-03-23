@@ -36,6 +36,12 @@ struct Opt {
 
 type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 
+#[derive(PartialEq)]
+enum State {
+    Silence,
+    Recording
+}
+
 fn main() -> Result<(), anyhow::Error> {
     dotenv::dotenv().ok();
 
@@ -131,6 +137,11 @@ fn main() -> Result<(), anyhow::Error> {
     let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
 
+    let mut state: State = State::Silence;
+    let mut speech_buffer: Vec<f32> = Vec::new();
+    let silence_threshold_chunks = 1;
+    let mut silence_counter = 0;
+
     while running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_secs(chunk_duration_spec as u64));
 
@@ -150,9 +161,34 @@ fn main() -> Result<(), anyhow::Error> {
             let mono = to_mono(&full_chunk, channels);
 
             if has_speech(&mono, 0.005) {
-                if tx.send(mono).is_err() {
-                    break;
+                
+                if state == State::Silence {
+                    state = State::Recording;
                 }
+
+                speech_buffer.extend(mono);
+                silence_counter = 0;
+
+            } else {
+
+                if state == State::Recording {
+
+                    silence_counter += 1;
+
+                    if silence_counter >= silence_threshold_chunks {
+
+                        if tx.send(std::mem::take(&mut speech_buffer)).is_err() {
+                            break;
+                        }
+
+                        state = State::Silence;
+
+                    } else {
+                        speech_buffer.extend(mono);
+                    }
+
+                }
+
             }
         }
     }
