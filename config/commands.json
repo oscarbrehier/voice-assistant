@@ -2,19 +2,22 @@
   "static_commands": [
     {
       "action": "PlayMusic",
-      "triggers": ["play music", "play song", "start song", "play some music"]
+      "description": "Play/Pause the currently playing media",
+      "triggers": ["play music", "play song", "start song", "pause music"]
     },
     {
       "action": "GetTime",
+      "description": "Get the local time",
       "triggers": ["what time is it", "give me the time"]
     }
   ],
   "dynamic_commands": [
     {
       "action": "OpenApp",
+      "description": "Open a specific app",
       "patterns": ["open {}", "launch {}", "start {}"],
-      "regex": "^(open|launch|start)\\s+(\\w+)$",
-      "arg_type": "string"
+      "regex": "^(?:open|launch|start)\\s+(\\w+)$",
+      "arg_types": ["app"]
     }
   ]
 }

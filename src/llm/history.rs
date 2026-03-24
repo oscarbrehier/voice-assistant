@@ -6,6 +6,7 @@ pub struct Message {
     pub content: String,
 }
 
+#[derive(Debug)]
 pub struct ConversationHistory {
     pub messages: Vec<Message>,
     pub system_prompt: String,

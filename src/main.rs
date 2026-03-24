@@ -13,18 +13,22 @@ use std::{
 
 use clap::Parser;
 use cpal::traits::DeviceTrait;
+use tokio::runtime::Runtime;
 
 use crate::{
     actions::{Action, execute_action, handle_action}, audio::{
-        capture::init_audio_capture, devices::{list_input_devices, select_device_by_index}, tts::speak, utils::{has_speech, resample_to_16khz, to_mono}
-    }, commands::CommandMatcher, stt::stt_service::STTService
+        capture::init_audio_capture,
+        devices::{list_input_devices, select_device_by_index},
+        tts::speak,
+        utils::{has_speech, resample_to_16khz, to_mono},
+    }, commands::CommandMatcher, llm::LLMEngine, stt::stt_service::STTService
 };
 
-mod audio;
-mod stt;
 mod actions;
+mod audio;
 mod commands;
 mod llm;
+mod stt;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -38,15 +42,18 @@ type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 #[derive(PartialEq)]
 enum State {
     Silence,
-    Recording
+    Recording,
 }
 
 fn main() -> Result<(), anyhow::Error> {
     dotenv::dotenv().ok();
-    
-    let mut stt = STTService::new()?;
 
+    let mut stt = STTService::new()?;
+    
+    let rt = Runtime::new()?;
+    
     let command_matcher = CommandMatcher::from_file("config/commands.json")?;
+    let mut llm_engine = LLMEngine::new(&command_matcher.config);
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -90,7 +97,6 @@ fn main() -> Result<(), anyhow::Error> {
     let last_transcription = Arc::new(Mutex::new(String::new()));
     let last_transcription_clone = last_transcription.clone();
 
-
     let transcription_handle = thread::spawn(move || {
         while let Ok(chunk) = rx.recv() {
             let resampled = resample_to_16khz(&chunk, sample_rate_for_thread);
@@ -102,6 +108,8 @@ fn main() -> Result<(), anyhow::Error> {
                     if !trimmed.is_empty() {
                         let mut last = last_transcription_clone.lock().unwrap();
 
+                        println!("{}", trimmed);
+
                         let action = command_matcher.match_command(&trimmed);
 
                         println!("action: {:?}", action);
@@ -109,11 +117,18 @@ fn main() -> Result<(), anyhow::Error> {
                         if action != Action::Unknown {
                             trimmed.push_str(&format!("command: {:?}", action));
                             let _ = handle_action(action);
+                        } else {
+
+                            rt.block_on(async {
+                                match llm_engine.generate(&trimmed).await {
+                                    Err(e) => eprintln!("Failed to generate: {e}"),
+                                    _ => {}
+                                }
+                            });
+
                         }
 
                         if trimmed != *last {
-                            println!("{}", trimmed);
-
                             if let Ok(mut file) = OpenOptions::new()
                                 .create(true)
                                 .append(true)
@@ -161,34 +176,26 @@ fn main() -> Result<(), anyhow::Error> {
             let mono = to_mono(&full_chunk, channels);
 
             if has_speech(&mono, 0.005) {
-                
                 if state == State::Silence {
                     state = State::Recording;
                 }
 
                 speech_buffer.extend(mono);
                 silence_counter = 0;
-
             } else {
-
                 if state == State::Recording {
-
                     silence_counter += 1;
 
                     if silence_counter >= silence_threshold_chunks {
-
                         if tx.send(std::mem::take(&mut speech_buffer)).is_err() {
                             break;
                         }
 
                         state = State::Silence;
-
                     } else {
                         speech_buffer.extend(mono);
                     }
-
                 }
-
             }
         }
     }
