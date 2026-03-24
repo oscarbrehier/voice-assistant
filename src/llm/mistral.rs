@@ -1,9 +1,9 @@
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::llm::history::{ConversationHistory, Message};
+use crate::llm::{LLMResponse, history::{ConversationHistory}};
 
-pub async fn call_mistral_with_history(history: &ConversationHistory) -> anyhow::Result<Value> {
+pub async fn call_mistral_with_history(history: &ConversationHistory) -> anyhow::Result<LLMResponse> {
     let mistral_api_key = dotenv::var("MISTRA_API_KEY").expect("MISTRA_API_KEY key not found");
 
     let messages = history.build_history_string();
@@ -22,5 +22,13 @@ pub async fn call_mistral_with_history(history: &ConversationHistory) -> anyhow:
         .await?;
 
 	let result: Value = response.json().await?;
-	Ok(result["choices"][0]["message"]["content"].clone())
+    let content_str = result["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Mistral returned empty content"))?;
+
+    println!("json response: {}", content_str);
+    
+    let parsed_response: LLMResponse = serde_json::from_str(content_str)?;
+
+	Ok(parsed_response)
 }

@@ -1,27 +1,24 @@
 use std::{
     collections::VecDeque,
-    fs::OpenOptions,
-    io::Write,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
-    },
-    thread,
-    time::Duration,
+    }
 };
 
 use clap::Parser;
-use cpal::traits::DeviceTrait;
 use tokio::runtime::Runtime;
 
 use crate::{
-    actions::{Action, execute_action, handle_action}, audio::{
-        capture::init_audio_capture,
-        devices::{list_input_devices, select_device_by_index},
-        tts::speak,
-        utils::{has_speech, resample_to_16khz, to_mono},
-    }, commands::CommandMatcher, llm::LLMEngine, stt::stt_service::STTService
+    audio::{
+        capture::{init_audio_capture, run_vad_loop},
+        setup_audio_device,
+        stt::spawn_transcription_worker,
+    },
+    commands::CommandMatcher,
+    llm::LLMEngine,
+    stt::stt_service::STTService,
 };
 
 mod actions;
@@ -48,162 +45,36 @@ enum State {
 fn main() -> Result<(), anyhow::Error> {
     dotenv::dotenv().ok();
 
-    let mut stt = STTService::new()?;
-    
-    let rt = Runtime::new()?;
-    
-    let command_matcher = CommandMatcher::from_file("config/commands.json")?;
-    let mut llm_engine = LLMEngine::new(&command_matcher.config);
-
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
-
     ctrlc::set_handler(move || {
         running_clone.store(false, Ordering::SeqCst);
     })
     .expect("failed to set ctrlc handler");
 
     let opt = Opt::parse();
-    let device_index = opt.device.unwrap_or(0);
 
-    let device_list = list_input_devices().expect("failed to list devices");
-
-    for device in device_list.iter() {
-        println!("{} - {}", device.index, device.name);
-    }
-
-    let device = select_device_by_index(&device_list, device_index).expect("failed to get device");
-
-    println!("using input device: {:?}", device.description());
-
-    let config = if device.supports_input() {
-        device.default_input_config()
-    } else {
-        device.default_output_config()
-    }
-    .expect("failed to get default output/input config")
-    .to_owned();
-
+    let (device, config) = setup_audio_device(opt.device)?;
     let sample_rate = config.sample_rate() as usize;
-    let sample_rate_for_thread = sample_rate;
-
     let channels = config.channels() as usize;
-
-    let (tx, rx) = mpsc::channel::<Vec<f32>>();
+    
+    let stt = STTService::new()?;
+    let rt = Runtime::new()?;
+    let command_matcher = CommandMatcher::from_file("config/commands.json")?;
+    let llm_engine = LLMEngine::new(&command_matcher.config);
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, config).expect("failed to init audio capture");
+    let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
-    let last_transcription = Arc::new(Mutex::new(String::new()));
-    let last_transcription_clone = last_transcription.clone();
+    let worker_handle =
+        spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate);
 
-    let transcription_handle = thread::spawn(move || {
-        while let Ok(chunk) = rx.recv() {
-            let resampled = resample_to_16khz(&chunk, sample_rate_for_thread);
+    run_vad_loop(running, audio_buffer, tx, sample_rate, channels);
 
-            match stt.transcribe(&resampled) {
-                Ok(transcription) => {
-                    let mut trimmed = transcription.trim().to_lowercase().to_string();
-
-                    if !trimmed.is_empty() {
-                        let mut last = last_transcription_clone.lock().unwrap();
-
-                        println!("{}", trimmed);
-
-                        let action = command_matcher.match_command(&trimmed);
-
-                        println!("action: {:?}", action);
-
-                        if action != Action::Unknown {
-                            trimmed.push_str(&format!("command: {:?}", action));
-                            let _ = handle_action(action);
-                        } else {
-
-                            rt.block_on(async {
-                                match llm_engine.generate(&trimmed).await {
-                                    Err(e) => eprintln!("Failed to generate: {e}"),
-                                    _ => {}
-                                }
-                            });
-
-                        }
-
-                        if trimmed != *last {
-                            if let Ok(mut file) = OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("transcription.txt")
-                            {
-                                writeln!(file, "{}", trimmed).ok();
-                            }
-
-                            *last = trimmed.to_string();
-                        }
-                    }
-                }
-                Err(e) => eprintln!("transcription error: {}", e),
-            }
-        }
-    });
-
-    let chunk_duration_spec = 2;
-    let overlap_duration = 0.25;
-
-    let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
-    let overlap_size = sample_rate * channels * overlap_duration as usize;
-
-    let mut state: State = State::Silence;
-    let mut speech_buffer: Vec<f32> = Vec::new();
-    let silence_threshold_chunks = 1;
-    let mut silence_counter = 0;
-
-    while running.load(Ordering::SeqCst) {
-        thread::sleep(Duration::from_secs(chunk_duration_spec as u64));
-
-        let mut queue = audio_buffer.lock().unwrap();
-
-        if queue.len() >= chunk_size {
-            let drain_size = chunk_size - overlap_size;
-            let chunk: Vec<f32> = queue.drain(..drain_size).collect();
-
-            let overlap: Vec<f32> = queue.iter().take(overlap_size).copied().collect();
-
-            let mut full_chunk = chunk;
-            full_chunk.extend(overlap);
-
-            drop(queue);
-
-            let mono = to_mono(&full_chunk, channels);
-
-            if has_speech(&mono, 0.005) {
-                if state == State::Silence {
-                    state = State::Recording;
-                }
-
-                speech_buffer.extend(mono);
-                silence_counter = 0;
-            } else {
-                if state == State::Recording {
-                    silence_counter += 1;
-
-                    if silence_counter >= silence_threshold_chunks {
-                        if tx.send(std::mem::take(&mut speech_buffer)).is_err() {
-                            break;
-                        }
-
-                        state = State::Silence;
-                    } else {
-                        speech_buffer.extend(mono);
-                    }
-                }
-            }
-        }
-    }
-
-    drop(tx);
     drop(stream);
 
-    if let Err(e) = transcription_handle.join() {
+    if let Err(e) = worker_handle.join() {
         eprintln!("Transcription thread panicked: {:?}", e);
     }
 

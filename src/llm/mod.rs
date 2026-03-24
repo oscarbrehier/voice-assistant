@@ -1,11 +1,18 @@
-use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, time::{SystemTime, UNIX_EPOCH}};
 
-use tokio::runtime::Runtime;
+use serde::{Deserialize, Serialize};
 
-use crate::{commands::CommandConfig, llm::{history::ConversationHistory, mistral::call_mistral_with_history}};
+use crate::{Opt, commands::CommandConfig, llm::{history::ConversationHistory, mistral::call_mistral_with_history}};
 
 pub mod history;
 pub mod mistral;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LLMResponse {
+	action: Option<String>,
+	response: String,
+	params: Option<HashMap<String, String>>
+}
 
 pub struct LLMEngine {
 	last_updated: u64,
@@ -32,7 +39,7 @@ impl LLMEngine {
 
 	}
 
-	pub async fn generate(&mut self, text: &str) -> anyhow::Result<()> {
+	pub async fn generate(&mut self, text: &str) -> anyhow::Result<LLMResponse> {
 
 		self.history.add_user_input(text);
 		
@@ -42,9 +49,7 @@ impl LLMEngine {
 
 		let response = call_mistral_with_history(&self.history).await?;
 
-		println!("llm response: {}", response);
-
-		Ok(())
+		Ok(response)
 
 	}
 }

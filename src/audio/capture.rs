@@ -1,54 +1,20 @@
 use std::{
-    collections::VecDeque, fs::File, io::BufWriter, sync::{Arc, Mutex}
+    collections::VecDeque, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc}, thread, time::Duration
 };
 
 use cpal::{
-    Device, FromSample, Sample, Stream, SupportedStreamConfig,
+    Device, Stream, SupportedStreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
 
-type WavWriterHandle = Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>;
+use crate::{AudioQueue, State, audio::utils::{has_speech, to_mono}};
+
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
-
-fn write_input_data<T, U>(input: &[T], writer: &WavWriterHandle)
-where
-    T: Sample,
-    U: Sample + hound::Sample + FromSample<T>,
-{
-    if let Ok(mut guard) = writer.try_lock() {
-        if let Some(writer) = guard.as_mut() {
-            for &sample in input.iter() {
-                let sample: U = U::from_sample(sample);
-                if let Err(e) = writer.write_sample(sample) {
-                    eprintln!("Failed to write sample: {}", e);
-                }
-            }
-        }
-    }
-}
-
-fn sample_format(format: cpal::SampleFormat) -> hound::SampleFormat {
-    if format.is_float() {
-        hound::SampleFormat::Float
-    } else {
-        hound::SampleFormat::Int
-    }
-}
-
-fn wav_spec_from_config(config: &cpal::SupportedStreamConfig) -> hound::WavSpec {
-    hound::WavSpec {
-        channels: config.channels() as _,
-        sample_rate: config.sample_rate() as _,
-        bits_per_sample: (config.sample_format().sample_size() * 8) as _,
-        sample_format: sample_format(config.sample_format()),
-    }
-}
 
 pub fn init_audio_capture(
     device: &Device,
     config: SupportedStreamConfig,
 ) -> Result<(Stream, AudioBuffer), anyhow::Error> {
-
     let audio_buffer = Arc::new(Mutex::new(VecDeque::new()));
     let audio_buffer_clone = audio_buffer.clone();
 
@@ -103,4 +69,66 @@ pub fn init_audio_capture(
     stream.play()?;
 
     Ok((stream, audio_buffer))
+}
+
+pub fn run_vad_loop(
+    running: Arc<AtomicBool>,
+    audio_buffer: AudioQueue,
+    tx: mpsc::Sender<Vec<f32>>,
+    sample_rate: usize,
+    channels: usize
+) {
+    let chunk_duration_spec = 2;
+    let overlap_duration = 0.25;
+
+    let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
+    let overlap_size = sample_rate * channels * overlap_duration as usize;
+
+    let mut state: State = State::Silence;
+    let mut speech_buffer: Vec<f32> = Vec::new();
+    let silence_threshold_chunks = 1;
+    let mut silence_counter = 0;
+
+    while running.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_secs(chunk_duration_spec as u64));
+
+        let mut queue = audio_buffer.lock().unwrap();
+
+        if queue.len() >= chunk_size {
+            let drain_size = chunk_size - overlap_size;
+            let chunk: Vec<f32> = queue.drain(..drain_size).collect();
+
+            let overlap: Vec<f32> = queue.iter().take(overlap_size).copied().collect();
+
+            let mut full_chunk = chunk;
+            full_chunk.extend(overlap);
+
+            drop(queue);
+
+            let mono = to_mono(&full_chunk, channels);
+
+            if has_speech(&mono, 0.005) {
+                if state == State::Silence {
+                    state = State::Recording;
+                }
+
+                speech_buffer.extend(mono);
+                silence_counter = 0;
+            } else {
+                if state == State::Recording {
+                    silence_counter += 1;
+
+                    if silence_counter >= silence_threshold_chunks {
+                        if tx.send(std::mem::take(&mut speech_buffer)).is_err() {
+                            break;
+                        }
+
+                        state = State::Silence;
+                    } else {
+                        speech_buffer.extend(mono);
+                    }
+                }
+            }
+        }
+    }
 }
