@@ -98,7 +98,7 @@ impl CommandMatcher {
         Action::Unknown
     }
 
-    fn build_action(&self, action_type: &str, params: Option<HashMap<String, String>>) -> Action {
+    pub fn build_action(&self, action_type: &str, params: Option<HashMap<String, String>>) -> Action {
         match action_type {
             "PlayMusic" => Action::PlayMusic,
             "OpenApp" => {

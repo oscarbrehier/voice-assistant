@@ -1,9 +1,18 @@
-use std::{fs::OpenOptions, io::Write, sync::{Arc, Mutex, mpsc}, thread};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    sync::{Arc, Mutex, mpsc},
+    thread,
+};
 
 use tokio::runtime::Runtime;
 
 use crate::{
-    actions::{Action, handle_action}, audio::utils::resample_to_16khz, commands::CommandMatcher, llm::LLMEngine, stt::stt_service::STTService
+    actions::{Action, handle_action},
+    audio::{tts::speak, utils::resample_to_16khz},
+    commands::CommandMatcher,
+    llm::LLMEngine,
+    stt::stt_service::STTService,
 };
 
 pub fn spawn_transcription_worker(
@@ -39,8 +48,22 @@ pub fn spawn_transcription_worker(
                         } else {
                             rt.block_on(async {
                                 match llm_engine.generate(&trimmed).await {
+                                    Ok(response) => {
+                                        if let Some(action_str) = response.action {
+                                            let action = command_matcher
+                                                .build_action(&action_str, response.params);
+
+                                            if action != Action::Unknown {
+                                                let _ = handle_action(action);
+                                            }
+                                        }
+
+                                        match speak(&response.message) {
+                                            Err(e) => eprintln!("failed to generate speech: {e}"),
+                                            _ => {}
+                                        }
+                                    }
                                     Err(e) => eprintln!("Failed to generate: {e}"),
-                                    _ => {}
                                 }
                             });
                         }

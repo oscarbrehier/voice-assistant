@@ -9,9 +9,10 @@ pub mod mistral;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LLMResponse {
-	action: Option<String>,
-	response: String,
-	params: Option<HashMap<String, String>>
+	pub(crate) action: Option<String>,
+	pub(crate) message: String,
+	#[serde(default)]
+	pub(crate) params: Option<HashMap<String, String>>
 }
 
 pub struct LLMEngine {
