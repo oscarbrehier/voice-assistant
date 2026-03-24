@@ -15,7 +15,7 @@ use clap::Parser;
 use cpal::traits::DeviceTrait;
 
 use crate::{
-    actions::{Action, execute_action}, audio::{
+    actions::{Action, execute_action, handle_action}, audio::{
         capture::init_audio_capture, devices::{list_input_devices, select_device_by_index}, tts::speak, utils::{has_speech, resample_to_16khz, to_mono}
     }, commands::CommandMatcher, stt::stt_service::STTService
 };
@@ -24,6 +24,7 @@ mod audio;
 mod stt;
 mod actions;
 mod commands;
+mod llm;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -107,7 +108,7 @@ fn main() -> Result<(), anyhow::Error> {
 
                         if action != Action::Unknown {
                             trimmed.push_str(&format!("command: {:?}", action));
-                            let _ = execute_action(action);
+                            let _ = handle_action(action);
                         }
 
                         if trimmed != *last {

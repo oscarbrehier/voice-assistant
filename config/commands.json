@@ -3,6 +3,10 @@
     {
       "action": "PlayMusic",
       "triggers": ["play music", "play song", "start song", "play some music"]
+    },
+    {
+      "action": "GetTime",
+      "triggers": ["what time is it", "give me the time"]
     }
   ],
   "dynamic_commands": [

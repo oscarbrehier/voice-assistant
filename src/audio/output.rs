@@ -56,8 +56,9 @@ pub fn play_mp3_audio(path: &str) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to decode mp3: {e}"))?;
 
     player.append(source);
-
     player.sleep_until_end();
+
+    drop(sink_handle);
 
     Ok(())
 }

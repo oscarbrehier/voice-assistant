@@ -95,6 +95,7 @@ impl CommandMatcher {
                 Some(app) => Action::OpenApp(app),
                 None => Action::Unknown,
             },
+            "GetTime" => Action::GetTime,
             _ => Action::Unknown,
         }
     }
