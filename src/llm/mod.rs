@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs, time::{SystemTime, UNIX_EPOCH}};
 
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::{Opt, commands::CommandConfig, llm::{history::ConversationHistory, mistral::call_mistral_with_history}};
 
@@ -40,6 +41,7 @@ impl LLMEngine {
 
 	}
 
+	#[instrument(skip(self, text), fields(input = %text))]
 	pub async fn generate(&mut self, text: &str) -> anyhow::Result<LLMResponse> {
 
 		self.history.add_user_input(text);

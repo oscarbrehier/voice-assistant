@@ -4,7 +4,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
-    }
+    }, time::Duration
 };
 
 use clap::Parser;
@@ -13,19 +13,16 @@ use tokio::runtime::Runtime;
 use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
-        setup_audio_device,
-        stt::spawn_transcription_worker,
+        setup_audio_device, stt::stt_service::STTService
     },
     commands::CommandMatcher,
     llm::LLMEngine,
-    stt::stt_service::STTService,
 };
 
 mod actions;
 mod audio;
 mod commands;
 mod llm;
-mod stt;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -42,8 +39,28 @@ enum State {
     Recording,
 }
 
+struct ActiveGuard {
+    assistant: Arc<AtomicBool>
+}
+
+impl ActiveGuard {
+    fn new(assistant: Arc<AtomicBool>) -> Self {
+        assistant.store(true, Ordering::SeqCst);
+        Self { assistant }
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(500));
+        self.assistant.store(false, Ordering::SeqCst);
+    }
+}
+
 fn main() -> Result<(), anyhow::Error> {
     dotenv::dotenv().ok();
+
+    tracing_subscriber::fmt::init();
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -51,6 +68,8 @@ fn main() -> Result<(), anyhow::Error> {
         running_clone.store(false, Ordering::SeqCst);
     })
     .expect("failed to set ctrlc handler");
+
+    let assistant_active = Arc::new(AtomicBool::new(false));
 
     let opt = Opt::parse();
 
@@ -67,10 +86,12 @@ fn main() -> Result<(), anyhow::Error> {
         init_audio_capture(&device, config).expect("failed to init audio capture");
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
-    let worker_handle =
-        spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate);
+    let assistant_active_worker = assistant_active.clone();
 
-    run_vad_loop(running, audio_buffer, tx, sample_rate, channels);
+    let worker_handle =
+        audio::stt::spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate, assistant_active_worker);
+
+    run_vad_loop(running, audio_buffer, tx, sample_rate, channels, assistant_active);
 
     drop(stream);
 

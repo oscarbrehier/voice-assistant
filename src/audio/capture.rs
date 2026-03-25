@@ -1,13 +1,24 @@
 use std::{
-    collections::VecDeque, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc}, thread, time::Duration
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
 };
 
 use cpal::{
     Device, Stream, SupportedStreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
+use tracing::{Level, span};
 
-use crate::{AudioQueue, State, audio::utils::{has_speech, to_mono}};
+use crate::{
+    AudioQueue, State,
+    audio::utils::{has_speech, to_mono},
+};
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
 
@@ -76,8 +87,11 @@ pub fn run_vad_loop(
     audio_buffer: AudioQueue,
     tx: mpsc::Sender<Vec<f32>>,
     sample_rate: usize,
-    channels: usize
+    channels: usize,
+    assistant_active: Arc<AtomicBool>,
 ) {
+    let _loop_span = span!(Level::INFO, "vad_loop").entered();
+
     let chunk_duration_spec = 2;
     let overlap_duration = 0.25;
 
@@ -90,11 +104,20 @@ pub fn run_vad_loop(
     let mut silence_counter = 0;
 
     while running.load(Ordering::SeqCst) {
-        thread::sleep(Duration::from_secs(chunk_duration_spec as u64));
+        thread::sleep(std::time::Duration::from_millis(100));
 
         let mut queue = audio_buffer.lock().unwrap();
 
+        if assistant_active.load(Ordering::SeqCst) {
+            queue.clear();
+            speech_buffer.clear();
+            state = State::Silence;
+            continue;
+        }
+
         if queue.len() >= chunk_size {
+            let processing_span = span!(Level::DEBUG, "processing_audio_chunk").entered();
+
             let drain_size = chunk_size - overlap_size;
             let chunk: Vec<f32> = queue.drain(..drain_size).collect();
 
