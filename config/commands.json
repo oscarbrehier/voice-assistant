@@ -17,7 +17,16 @@
       "description": "Open a specific app",
       "patterns": ["open {}", "launch {}", "start {}"],
       "regex": "^(?:open|launch|start)\\s+(\\w+)$",
-      "arg_types": ["app"]
+      "arg_types": ["app"],
+      "generate_message": false
+    },
+    {
+      "action": "WebSearch",
+      "description": "Search a topic on the internet",
+      "patterns": ["search {}"],
+      "regex": "^search\\s+(.+)$",
+      "arg_types": ["query"],
+      "generate_message": true
     }
   ]
 }

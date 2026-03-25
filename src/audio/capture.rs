@@ -130,7 +130,7 @@ pub fn run_vad_loop(
 
             let mono = to_mono(&full_chunk, channels);
 
-            if has_speech(&mono, 0.005) {
+            if has_speech(&mono, 0.015) {
                 if state == State::Silence {
                     state = State::Recording;
                 }
