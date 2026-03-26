@@ -70,23 +70,30 @@ pub fn spawn_transcription_worker(
                             rt.block_on(async {
                                 match llm_engine.generate(&trimmed).await {
                                     Ok(response) => {
-                                        if let Some(action_str) = response.action {
-                                            let action = command_matcher
-                                                .build_action(&action_str, response.params);
+                                        let action: Action =
+                                            serde_json::from_value(serde_json::json!({
+                                                "action": response.action,
+                                                "params": response.params
+                                            }))
+                                            .unwrap_or(Action::Unknown);
 
-                                            if action != Action::Unknown {
-                                                let _ = handle_action(action);
+                                        if action != Action::Unknown {
+                                            let _ = handle_action(action);
+                                        }
+
+                                        if !response.message.is_empty() {
+                                            let tts_span =
+                                                span!(Level::INFO, "tts_speech").entered();
+
+                                            match speak(&response.message) {
+                                                Err(e) => {
+                                                    eprintln!("failed to generate speech: {e}")
+                                                }
+                                                _ => {}
                                             }
+
+                                            drop(tts_span);
                                         }
-
-                                        let tts_span = span!(Level::INFO, "tts_speech").entered();
-
-                                        match speak(&response.message) {
-                                            Err(e) => eprintln!("failed to generate speech: {e}"),
-                                            _ => {}
-                                        }
-
-                                        drop(tts_span);
                                     }
                                     Err(e) => eprintln!("Failed to generate: {e}"),
                                 }

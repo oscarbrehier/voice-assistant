@@ -74,42 +74,37 @@ impl CommandMatcher {
 
         for (trigger, action_type) in &self.static_triggers {
             if text_lower.contains(trigger) {
-                return self.build_action(&action_type, None);
+                let val = serde_json::json!({
+                    "action": action_type,
+                    "params": null
+                });
+
+                return serde_json::from_value(val).unwrap_or(Action::Unknown);
             }
         }
 
         for cmd in &self.dynamic_commands {
             if let Some(captures) = cmd.regex.captures(&text_lower) {
-                let mut params = HashMap::new();
+                let mut map = serde_json::Map::new();
 
-                for (i, arg_type) in cmd.arg_types.iter().enumerate() {
+                for (i, arg_name) in cmd.arg_types.iter().enumerate() {
                     if let Some(arg) = captures.get(i + 1) {
-                        let arg_value = arg.as_str().trim().to_string();
+                        let arg_value = arg.as_str().to_string();
                         if !arg_value.is_empty() {
-                            params.insert(arg_type.clone(), arg_value);
+                            map.insert(arg_name.clone(), serde_json::Value::String(arg_value));
                         }
                     }
                 }
 
-                return self.build_action(&cmd.action_type, Some(params));
+                let val = serde_json::json!({
+                    "action": cmd.action_type,
+                    "params": map
+                });
+
+                return serde_json::from_value(val).unwrap_or(Action::Unknown);
             }
         }
 
         Action::Unknown
-    }
-
-    pub fn build_action(&self, action_type: &str, params: Option<HashMap<String, String>>) -> Action {
-        match action_type {
-            "PlayMusic" => Action::PlayMusic,
-            "OpenApp" => {
-                let app = params.and_then(|p| p.get("app").cloned());
-                match app {
-                    Some(app) => Action::OpenApp(app),
-                    None => Action::Unknown,
-                }
-            }
-            "GetTime" => Action::GetTime,
-            _ => Action::Unknown,
-        }
     }
 }
