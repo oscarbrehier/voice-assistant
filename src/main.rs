@@ -14,11 +14,10 @@ use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
         setup_audio_device, stt::stt_service::STTService
-    },
-    commands::CommandMatcher,
-    llm::LLMEngine,
+    }, commands::CommandMatcher, config::Config, llm::LLMEngine
 };
 
+mod config;
 mod actions;
 mod audio;
 mod commands;
@@ -72,10 +71,11 @@ fn main() -> Result<(), anyhow::Error> {
     let assistant_active = Arc::new(AtomicBool::new(false));
 
     let opt = Opt::parse();
+    let config = Config::load("config/config.json")?;
 
-    let (device, config) = setup_audio_device(opt.device)?;
-    let sample_rate = config.sample_rate() as usize;
-    let channels = config.channels() as usize;
+    let (device, stream_config) = setup_audio_device(opt.device)?;
+    let sample_rate = stream_config.sample_rate() as usize;
+    let channels = stream_config.channels() as usize;
     
     let stt = STTService::new()?;
     let rt = Runtime::new()?;
@@ -83,7 +83,7 @@ fn main() -> Result<(), anyhow::Error> {
     let llm_engine = LLMEngine::new(&command_matcher.config);
 
     let (stream, audio_buffer) =
-        init_audio_capture(&device, config).expect("failed to init audio capture");
+        init_audio_capture(&device, stream_config).expect("failed to init audio capture");
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
     let assistant_active_worker = assistant_active.clone();

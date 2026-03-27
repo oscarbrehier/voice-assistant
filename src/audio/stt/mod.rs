@@ -1,5 +1,4 @@
 pub mod stt_service;
-pub mod whisper;
 
 use std::{
     fs::OpenOptions,
@@ -46,9 +45,17 @@ pub fn spawn_transcription_worker(
 
             match transcription_result {
                 Ok(transcription) => {
+                    
                     let mut trimmed = transcription.trim().to_lowercase().to_string();
-
+                    
                     if !trimmed.is_empty() {
+
+                        let wake_word = "hey jarvis";
+
+                        if trimmed.contains(&wake_word) {
+                            println!("wake word detected");
+                        }
+                        
                         let mut last = last_transcription.lock().unwrap();
 
                         println!("{}", trimmed);

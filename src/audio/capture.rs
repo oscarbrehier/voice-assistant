@@ -17,7 +17,9 @@ use tracing::{Level, span};
 
 use crate::{
     AudioQueue, State,
-    audio::utils::{has_speech, to_mono},
+    audio::{
+        utils::{has_speech, to_mono}
+    },
 };
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
