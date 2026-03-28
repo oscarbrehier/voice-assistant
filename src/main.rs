@@ -89,7 +89,7 @@ fn main() -> Result<(), anyhow::Error> {
     let assistant_active_worker = assistant_active.clone();
 
     let worker_handle =
-        audio::stt::spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate, assistant_active_worker);
+        audio::stt::spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate, assistant_active_worker, config);
 
     run_vad_loop(running, audio_buffer, tx, sample_rate, channels, assistant_active);
 

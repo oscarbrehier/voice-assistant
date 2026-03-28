@@ -15,11 +15,7 @@ use tokio::runtime::Runtime;
 use tracing::{Level, span};
 
 use crate::{
-    ActiveGuard,
-    actions::{Action, handle_action},
-    audio::{stt::stt_service::STTService, tts::speak, utils::resample_to_16khz},
-    commands::CommandMatcher,
-    llm::LLMEngine,
+    ActiveGuard, actions::{Action, handle_action}, audio::{stt::stt_service::STTService, tts::speak, utils::resample_to_16khz}, commands::CommandMatcher, config::Config, llm::LLMEngine
 };
 
 pub fn spawn_transcription_worker(
@@ -30,6 +26,7 @@ pub fn spawn_transcription_worker(
     rt: Runtime,
     sample_rate: usize,
     assistant_active: Arc<AtomicBool>,
+    config: Config
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let last_transcription = Arc::new(Mutex::new(String::new()));
@@ -50,9 +47,7 @@ pub fn spawn_transcription_worker(
                     
                     if !trimmed.is_empty() {
 
-                        let wake_word = "hey jarvis";
-
-                        if trimmed.contains(&wake_word) {
+                        if trimmed.contains(&config.trigger_word) {
                             println!("wake word detected");
                         }
                         
@@ -60,53 +55,53 @@ pub fn spawn_transcription_worker(
 
                         println!("{}", trimmed);
 
-                        let match_span = span!(Level::DEBUG, "command_matching").entered();
-                        let action = command_matcher.match_command(&trimmed);
-                        drop(match_span);
+                        // let match_span = span!(Level::DEBUG, "command_matching").entered();
+                        // let action = command_matcher.match_command(&trimmed);
+                        // drop(match_span);
 
-                        println!("action: {:?}", action);
+                        // println!("action: {:?}", action);
 
-                        if action != Action::Unknown {
-                            trimmed.push_str(&format!("command: {:?}", action));
-                            let _guard = ActiveGuard::new(assistant_active.clone());
-                            let _ = handle_action(action);
-                        } else {
-                            let llm_span = span!(Level::INFO, "llm_fallback_generation").entered();
-                            let _guard = ActiveGuard::new(assistant_active.clone());
+                        // if action != Action::Unknown {
+                        //     trimmed.push_str(&format!("command: {:?}", action));
+                        //     let _guard = ActiveGuard::new(assistant_active.clone());
+                        //     let _ = handle_action(action);
+                        // } else {
+                        //     let llm_span = span!(Level::INFO, "llm_fallback_generation").entered();
+                        //     let _guard = ActiveGuard::new(assistant_active.clone());
 
-                            rt.block_on(async {
-                                match llm_engine.generate(&trimmed).await {
-                                    Ok(response) => {
-                                        let action: Action =
-                                            serde_json::from_value(serde_json::json!({
-                                                "action": response.action,
-                                                "params": response.params
-                                            }))
-                                            .unwrap_or(Action::Unknown);
+                        //     rt.block_on(async {
+                        //         match llm_engine.generate(&trimmed).await {
+                        //             Ok(response) => {
+                        //                 let action: Action =
+                        //                     serde_json::from_value(serde_json::json!({
+                        //                         "action": response.action,
+                        //                         "params": response.params
+                        //                     }))
+                        //                     .unwrap_or(Action::Unknown);
 
-                                        if action != Action::Unknown {
-                                            let _ = handle_action(action);
-                                        }
+                        //                 if action != Action::Unknown {
+                        //                     let _ = handle_action(action);
+                        //                 }
 
-                                        if !response.message.is_empty() {
-                                            let tts_span =
-                                                span!(Level::INFO, "tts_speech").entered();
+                        //                 if !response.message.is_empty() {
+                        //                     let tts_span =
+                        //                         span!(Level::INFO, "tts_speech").entered();
 
-                                            match speak(&response.message) {
-                                                Err(e) => {
-                                                    eprintln!("failed to generate speech: {e}")
-                                                }
-                                                _ => {}
-                                            }
+                        //                     match speak(&response.message) {
+                        //                         Err(e) => {
+                        //                             eprintln!("failed to generate speech: {e}")
+                        //                         }
+                        //                         _ => {}
+                        //                     }
 
-                                            drop(tts_span);
-                                        }
-                                    }
-                                    Err(e) => eprintln!("Failed to generate: {e}"),
-                                }
-                            });
-                            drop(llm_span);
-                        }
+                        //                     drop(tts_span);
+                        //                 }
+                        //             }
+                        //             Err(e) => eprintln!("Failed to generate: {e}"),
+                        //         }
+                        //     });
+                        //     drop(llm_span);
+                        // }
 
                         if trimmed != *last {
                             if let Ok(mut file) = OpenOptions::new()

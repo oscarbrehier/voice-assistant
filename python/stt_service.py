@@ -11,6 +11,11 @@ class STTService:
     
     def transcribe(self, audio_data):
         try:
+            max_val = np.max(np.abs(audio_data))
+            
+            if max_val > 0:
+                audio_data = audio_data / max_val
+            
             segments, info = self.model.transcribe(
                 audio_data, 
                 language="en",

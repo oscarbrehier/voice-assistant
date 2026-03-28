@@ -58,7 +58,7 @@ pub fn init_audio_capture(
             &config.into(),
             move |data: &[i32], _: &_| {
                 let mut buffer = audio_buffer_clone.lock().unwrap();
-                buffer.extend(data.iter().map(|&sample| sample as f32 / 32768.0));
+                buffer.extend(data.iter().map(|&sample| sample as f32 / 2147483648.0));
             },
             err_fn,
             None,
