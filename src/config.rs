@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-	pub trigger_word: String
+	pub name: String
 }
 
 impl Config {
