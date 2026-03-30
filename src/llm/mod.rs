@@ -50,7 +50,9 @@ impl LLMEngine {
 			println!("{} - {}\n\n", message.role, message.content);
 		}
 
-		let response = call_mistral_with_history(&self.history).await?;
+		let (response, raw_json) = call_mistral_with_history(&mut self.history).await?;
+
+		self.history.add_assistant_response(&raw_json);
 
 		Ok(response)
 

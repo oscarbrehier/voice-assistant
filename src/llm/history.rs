@@ -19,24 +19,44 @@ impl ConversationHistory {
                 role: "system".to_string(),
                 content: system_prompt.to_string(),
             }],
-			system_prompt: system_prompt.to_string()
+            system_prompt: system_prompt.to_string(),
         }
     }
 
-    pub fn build_history_string(&self) -> Vec<Value> {
-        self.messages.iter()
-            .map(|m| serde_json::json!({
-                "role": m.role,
-                "content": m.content
-            }))
+    pub fn build_history_string(&mut self) -> Vec<Value> {
+        let max_history_messages = 15;
+
+        while self.messages.len() >= max_history_messages {
+            if self.messages.len() > 1 {
+                self.messages.remove(1);
+            }
+            if self.messages.len() > 1 {
+                self.messages.remove(1);
+            }
+        }
+
+        self.messages
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "role": m.role,
+                    "content": m.content
+                })
+            })
             .collect::<Vec<_>>()
     }
 
-	pub fn add_user_input(&mut self, input: &str) {
-		self.messages.push(Message { role: "user".to_string(), content: input.to_string() });
-	}
+    pub fn add_user_input(&mut self, input: &str) {
+        self.messages.push(Message {
+            role: "user".to_string(),
+            content: input.to_string(),
+        });
+    }
 
-	pub fn add_assistant_response(&mut self, response: &str) {
-		self.messages.push(Message { role: "assistant".to_string(), content: response.to_string() })
-	}
+    pub fn add_assistant_response(&mut self, response: &str) {
+        self.messages.push(Message {
+            role: "assistant".to_string(),
+            content: response.to_string(),
+        })
+    }
 }

@@ -2,24 +2,20 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     },
     thread,
-    time::Duration,
 };
 
 use cpal::{
     Device, Stream, SupportedStreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
-use tracing::{Level, span};
 
 use crate::{
     AudioQueue, State,
-    audio::{
-        utils::{has_speech, to_mono}
-    },
+    audio::utils::{has_speech, to_mono},
 };
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
@@ -91,35 +87,48 @@ pub fn run_vad_loop(
     sample_rate: usize,
     channels: usize,
     assistant_active: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
 ) {
-    let _loop_span = span!(Level::INFO, "vad_loop").entered();
-
     let chunk_duration_spec = 2;
     let overlap_duration = 0.25;
 
     let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
 
-    let mut state: State = State::Silence;
     let mut speech_buffer: Vec<f32> = Vec::new();
     let silence_threshold_chunks = 1;
     let mut silence_counter = 0;
 
+    let mut last_speech_instant = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(20);
+
     while running.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(100));
 
+        let current_state = state.load(Ordering::SeqCst);
+
+        if current_state == State::Active as u8 {
+            if last_speech_instant.elapsed() > timeout {
+                state.store(State::Idle as u8, Ordering::SeqCst);
+            }
+        }
+
         let mut queue = audio_buffer.lock().unwrap();
 
+        if queue.len() > (chunk_size as f32 * 1.5) as usize {
+            let to_drop = queue.len() - chunk_size;
+            queue.drain(..to_drop);
+        }
+
         if assistant_active.load(Ordering::SeqCst) {
+            last_speech_instant = std::time::Instant::now();
+
             queue.clear();
             speech_buffer.clear();
-            state = State::Silence;
             continue;
         }
 
         if queue.len() >= chunk_size {
-            let processing_span = span!(Level::DEBUG, "processing_audio_chunk").entered();
-
             let drain_size = chunk_size - overlap_size;
             let chunk: Vec<f32> = queue.drain(..drain_size).collect();
 
@@ -133,22 +142,28 @@ pub fn run_vad_loop(
             let mono = to_mono(&full_chunk, channels);
 
             if has_speech(&mono, 0.015) {
-                if state == State::Silence {
-                    state = State::Recording;
+                last_speech_instant = std::time::Instant::now();
+
+                if current_state == State::Idle as u8 {
+                    state.store(State::Recording as u8, Ordering::SeqCst);
                 }
 
                 speech_buffer.extend(mono);
                 silence_counter = 0;
             } else {
-                if state == State::Recording {
+                if current_state == State::Recording as u8 || current_state == State::Active as u8 {
                     silence_counter += 1;
 
                     if silence_counter >= silence_threshold_chunks {
-                        if tx.send(std::mem::take(&mut speech_buffer)).is_err() {
-                            break;
+                        if !speech_buffer.is_empty() {
+                            let _ = tx.send(std::mem::take(&mut speech_buffer));
                         }
 
-                        state = State::Silence;
+                        if current_state == State::Recording as u8 {
+                            state.store(State::Idle as u8, Ordering::SeqCst);
+                        }
+
+                        silence_counter = 0;
                     } else {
                         speech_buffer.extend(mono);
                     }

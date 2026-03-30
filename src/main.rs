@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     }, time::Duration
 };
@@ -33,9 +33,11 @@ struct Opt {
 type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 
 #[derive(PartialEq)]
+#[repr(u8)]
 enum State {
-    Silence,
-    Recording,
+    Idle = 0,
+    Recording = 1,
+    Active = 2,
 }
 
 struct ActiveGuard {
@@ -82,16 +84,20 @@ fn main() -> Result<(), anyhow::Error> {
     let command_matcher = CommandMatcher::from_file("config/commands.json")?;
     let llm_engine = LLMEngine::new(&command_matcher.config);
 
+    let state = Arc::new(AtomicU8::new(State::Idle as u8));
+
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
     let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
     let assistant_active_worker = assistant_active.clone();
 
+    let stt_state = state.clone();
     let worker_handle =
-        audio::stt::spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate, assistant_active_worker, config);
+        audio::stt::spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate, assistant_active_worker, config, stt_state);
 
-    run_vad_loop(running, audio_buffer, tx, sample_rate, channels, assistant_active);
+    let vad_state = state.clone();
+    run_vad_loop(running, audio_buffer, tx, sample_rate, channels, assistant_active, vad_state);
 
     drop(stream);
 

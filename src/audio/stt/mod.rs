@@ -5,7 +5,7 @@ use std::{
     io::Write,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     },
     thread,
@@ -15,7 +15,12 @@ use tokio::runtime::Runtime;
 use tracing::{Level, span};
 
 use crate::{
-    ActiveGuard, actions::{Action, handle_action}, audio::{stt::stt_service::STTService, tts::speak, utils::resample_to_16khz}, commands::CommandMatcher, config::Config, llm::LLMEngine
+    ActiveGuard, State,
+    actions::{Action, handle_action},
+    audio::{stt::stt_service::STTService, tts::speak, utils::resample_to_16khz},
+    commands::CommandMatcher,
+    config::Config,
+    llm::LLMEngine,
 };
 
 pub fn spawn_transcription_worker(
@@ -26,14 +31,11 @@ pub fn spawn_transcription_worker(
     rt: Runtime,
     sample_rate: usize,
     assistant_active: Arc<AtomicBool>,
-    config: Config
+    config: Config,
+    state: Arc<AtomicU8>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let last_transcription = Arc::new(Mutex::new(String::new()));
-
         while let Ok(chunk) = rx.recv() {
-            let pipeline_span = span!(Level::INFO, "speech_processing_pipeline").entered();
-
             let resampled = resample_to_16khz(&chunk, sample_rate);
 
             let stt_span = span!(Level::INFO, "stt_transcription").entered();
@@ -42,77 +44,74 @@ pub fn spawn_transcription_worker(
 
             match transcription_result {
                 Ok(transcription) => {
-                    
                     let mut trimmed = transcription.trim().to_lowercase().to_string();
-                    
-                    if !trimmed.is_empty() {
+                    if trimmed.is_empty() {
+                        return;
+                    }
 
-                        if trimmed.contains(&config.trigger_word) {
-                            println!("wake word detected");
+                    println!("TRANSCRIPTION: {}", trimmed);
+
+                    let current_state = state.load(Ordering::SeqCst);
+                    let has_wake_word = trimmed.contains(&config.trigger_word.to_lowercase());
+
+                    if has_wake_word || current_state == State::Active as u8 {
+                        if has_wake_word {
+                            state.store(State::Active as u8, Ordering::SeqCst);
                         }
-                        
-                        let mut last = last_transcription.lock().unwrap();
 
-                        println!("{}", trimmed);
+                        if trimmed.contains(&config.trigger_word)
+                            && current_state == State::Recording as u8
+                        {
+                            println!("wake word detected");
+                            state.store(State::Active as u8, Ordering::SeqCst);
+                        }
 
-                        // let match_span = span!(Level::DEBUG, "command_matching").entered();
-                        // let action = command_matcher.match_command(&trimmed);
-                        // drop(match_span);
+                        let match_span = span!(Level::DEBUG, "command_matching").entered();
+                        let action = command_matcher.match_command(&trimmed);
+                        drop(match_span);
 
-                        // println!("action: {:?}", action);
+                        println!("action: {:?}", action);
 
-                        // if action != Action::Unknown {
-                        //     trimmed.push_str(&format!("command: {:?}", action));
-                        //     let _guard = ActiveGuard::new(assistant_active.clone());
-                        //     let _ = handle_action(action);
-                        // } else {
-                        //     let llm_span = span!(Level::INFO, "llm_fallback_generation").entered();
-                        //     let _guard = ActiveGuard::new(assistant_active.clone());
+                        if action != Action::Unknown {
+                            trimmed.push_str(&format!("command: {:?}", action));
+                            let _guard = ActiveGuard::new(assistant_active.clone());
+                            let _ = handle_action(action);
+                        } else {
+                            let llm_span = span!(Level::INFO, "llm_fallback_generation").entered();
+                            let _guard = ActiveGuard::new(assistant_active.clone());
 
-                        //     rt.block_on(async {
-                        //         match llm_engine.generate(&trimmed).await {
-                        //             Ok(response) => {
-                        //                 let action: Action =
-                        //                     serde_json::from_value(serde_json::json!({
-                        //                         "action": response.action,
-                        //                         "params": response.params
-                        //                     }))
-                        //                     .unwrap_or(Action::Unknown);
+                            rt.block_on(async {
+                                match llm_engine.generate(&trimmed).await {
+                                    Ok(response) => {
+                                        let action: Action =
+                                            serde_json::from_value(serde_json::json!({
+                                                "action": response.action,
+                                                "params": response.params
+                                            }))
+                                            .unwrap_or(Action::Unknown);
 
-                        //                 if action != Action::Unknown {
-                        //                     let _ = handle_action(action);
-                        //                 }
+                                        if action != Action::Unknown {
+                                            let _ = handle_action(action);
+                                        }
 
-                        //                 if !response.message.is_empty() {
-                        //                     let tts_span =
-                        //                         span!(Level::INFO, "tts_speech").entered();
+                                        if !response.message.is_empty() {
+                                            let tts_span =
+                                                span!(Level::INFO, "tts_speech").entered();
 
-                        //                     match speak(&response.message) {
-                        //                         Err(e) => {
-                        //                             eprintln!("failed to generate speech: {e}")
-                        //                         }
-                        //                         _ => {}
-                        //                     }
+                                            match speak(&response.message) {
+                                                Err(e) => {
+                                                    eprintln!("failed to generate speech: {e}")
+                                                }
+                                                _ => {}
+                                            }
 
-                        //                     drop(tts_span);
-                        //                 }
-                        //             }
-                        //             Err(e) => eprintln!("Failed to generate: {e}"),
-                        //         }
-                        //     });
-                        //     drop(llm_span);
-                        // }
-
-                        if trimmed != *last {
-                            if let Ok(mut file) = OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("transcription.txt")
-                            {
-                                writeln!(file, "{}", trimmed).ok();
-                            }
-
-                            *last = trimmed.to_string();
+                                            drop(tts_span);
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Failed to generate: {e}"),
+                                }
+                            });
+                            drop(llm_span);
                         }
                     }
                 }
