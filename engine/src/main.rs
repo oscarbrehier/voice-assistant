@@ -82,7 +82,7 @@ fn main() -> Result<(), anyhow::Error> {
     let stt = STTService::new()?;
     let rt = Runtime::new()?;
     let command_matcher = CommandMatcher::from_file("config/commands.json")?;
-    let llm_engine = LLMEngine::new(&command_matcher.config);
+    let llm_engine = LLMEngine::new(&config, &command_matcher.config);
 
     let state = Arc::new(AtomicU8::new(State::Idle as u8));
 

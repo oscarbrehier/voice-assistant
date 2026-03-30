@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs, time::{SystemTime, UNIX_EPOCH}};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::{Opt, commands::CommandConfig, llm::{history::ConversationHistory, mistral::call_mistral_with_history}};
+use crate::{Opt, commands::CommandConfig, config::Config, llm::{history::ConversationHistory, mistral::call_mistral_with_history}};
 
 pub mod history;
 pub mod mistral;
@@ -22,9 +22,9 @@ pub struct LLMEngine {
 }
 
 impl LLMEngine {
-	pub fn new(config: &CommandConfig) -> Self {
+	pub fn new(config: &Config, commands: &CommandConfig) -> Self {
 
-		let system_prompt = generate_system_prompt(&config)
+		let system_prompt = generate_system_prompt(config, commands)
 			.expect("Failed to generate system prompt");
 
 		let last_updated = SystemTime::now()
@@ -59,17 +59,17 @@ impl LLMEngine {
 	}
 }
 
-fn generate_system_prompt(config: &CommandConfig) -> anyhow::Result<String> {
+fn generate_system_prompt(config: &Config, commands: &CommandConfig) -> anyhow::Result<String> {
 
 	let mut commands_str = String::new();
 	let system_prompt = fs::read_to_string("config/system_prompt.txt")
 		.expect("System prompt template file not found in config");
 
-	for command in &config.static_commands {
+	for command in &commands.static_commands {
 		commands_str.push_str(&format!("- {}: {}\n", command.action, command.description));
 	}
 
-	for command in &config.dynamic_commands {
+	for command in &commands.dynamic_commands {
 
 		let param_placeholder = command.arg_types
 			.iter()
@@ -85,7 +85,9 @@ fn generate_system_prompt(config: &CommandConfig) -> anyhow::Result<String> {
 		));
 	}
 
-	let system_prompt = system_prompt.replace("{{actions}}", &commands_str);
+	let system_prompt = system_prompt
+		.replace("{{name}}", &config.name)
+		.replace("{{actions}}", &commands_str);
 	
 	Ok(system_prompt)
 

@@ -1,4 +1,4 @@
-You are a proactive voice assistant. You will receive a transcription of user speech.
+Your name is {{name}}. You are a proactive voice assistant. You will receive a transcription of user speech.
 Your available actions are:
 {{actions}}
 

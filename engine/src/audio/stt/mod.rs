@@ -13,6 +13,7 @@ use std::{
 
 use tokio::runtime::Runtime;
 use tracing::{Level, span};
+use tracing_subscriber::fmt::format;
 
 use crate::{
     ActiveGuard, State,
@@ -52,17 +53,10 @@ pub fn spawn_transcription_worker(
                     println!("TRANSCRIPTION: {}", trimmed);
 
                     let current_state = state.load(Ordering::SeqCst);
-                    let has_wake_word = trimmed.contains(&config.trigger_word.to_lowercase());
+                    let has_wake_word = trimmed.contains(&config.name);
 
                     if has_wake_word || current_state == State::Active as u8 {
                         if has_wake_word {
-                            state.store(State::Active as u8, Ordering::SeqCst);
-                        }
-
-                        if trimmed.contains(&config.trigger_word)
-                            && current_state == State::Recording as u8
-                        {
-                            println!("wake word detected");
                             state.store(State::Active as u8, Ordering::SeqCst);
                         }
 

@@ -1,11 +1,10 @@
-target/
-models/
-voices/
+**/target/
+**/models/
+**/voices/
 
-*.wav
-*.mp3
-*.rpw
+**/*.wav
+**/*.mp3
+**/*.rpw
+**/transcription.txt
 
-transcription.txt
-
-*.env
+**/.env
