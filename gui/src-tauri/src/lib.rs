@@ -3,6 +3,8 @@ use engine::{start_engine, AudioMessage};
 use tauri::Emitter;
 use tauri::Manager;
 
+struct AudioStream(cpal::Stream);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -23,15 +25,16 @@ pub fn run() {
                 .join("python");
 
             tauri::async_runtime::spawn(async move {
-
                 let paths = EnginePaths {
                     config_dir: config_path,
-                    script_dir: scripts_path
+                    script_dir: scripts_path,
                 };
 
                 match start_engine(paths, Some(22)).await {
-                    Ok(tx) => {
+                    Ok((tx, stream)) => {
+                        handle.manage(AudioStream(stream));
                         let mut ui_rx = tx.subscribe();
+
                         while let Ok(msg) = ui_rx.recv().await {
                             if let AudioMessage::Pulse(samples) = msg {
                                 let rms = (samples.iter().map(|x| x * x).sum::<f32>()
