@@ -1,11 +1,11 @@
 <template>
 	<div class="flex items-center justify-center">
-		<canvas ref="canvasRef" class="w-[30vw] h-[30vh] transition-opacity duration-500"
+		<canvas ref="canvasRef" class="w-[90vw] h-[90vh] transition-opacity duration-500"
 			:class="isLoaded ? 'opacity-100' : 'opacity-0'"></canvas>
 	</div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 
 /*
 	* Original shader: Siri [327] by Xor
@@ -21,13 +21,18 @@
 
 import { ref, onMounted, onUnmounted } from 'vue';
 
-const canvasRef = ref(null);
-const isLoaded = ref(false);
-const audioLevel = ref(0);
+const props = defineProps<{
+	audioLevel: number
+}>();
 
-let animationFrameId = null;
-let gl = null;
-let program = null;
+const canvasRef = ref<HTMLCanvasElement | null>(null);
+const isLoaded = ref<boolean>(false);
+
+const smoothedAudio = ref<number>(props.audioLevel);
+
+let animationFrameId: number | null = null;
+let gl: WebGL2RenderingContext | null = null;
+let program: WebGLProgram | null = null;
 
 const vsSource = `#version 300 es
 	in vec2 pos;
@@ -48,7 +53,7 @@ const fsSource = `#version 300 es
 	void main() {
 		vec4 finalCol = vec4(0.0);
 		
-		float padding = 1.7 - (iAudio * 0.6); 
+		float padding = 1.9 - (iAudio * 0.5); 
 
 		for(float m=0.; m<2.; m++) {
 			for(float n=0.; n<2.; n++) {
@@ -81,9 +86,12 @@ const fsSource = `#version 300 es
 	}
 `;
 
-const createShader = (type, source) => {
+const createShader = (type: number, source: string): WebGLShader | null => {
+
+	if (!gl) return null;
 
 	const shader = gl.createShader(type);
+	if (!shader) return null;
 
 	gl.shaderSource(shader, source);
 	gl.compileShader(shader);
@@ -92,17 +100,21 @@ const createShader = (type, source) => {
 
 };
 
-const initGL = () => {
+const initGL = (): void => {
 
 	const canvas = canvasRef.value;
+	if (!canvas) return;
 
 	gl = canvas.getContext('webgl2', { antialias: true, alpha: true });
 	if (!gl) return;
 
 	const vs = createShader(gl.VERTEX_SHADER, vsSource);
 	const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
+	if (!vs || !fs) return;
 
 	program = gl.createProgram();
+	if (!program) return;
+
 	gl.attachShader(program, vs);
 	gl.attachShader(program, fs);
 	gl.linkProgram(program);
@@ -119,9 +131,9 @@ const initGL = () => {
 
 };
 
-const render = (t) => {
+const render = (t: number): void => {
 
-	if (!gl || !program) return;
+	if (!gl || !program || !canvasRef.value) return;
 
 	const dpr = window.devicePixelRatio || 1;
 	const targetW = Math.floor(canvasRef.value.clientWidth * dpr);
@@ -131,16 +143,24 @@ const render = (t) => {
 		canvasRef.value.width = targetW;
 		canvasRef.value.height = targetH;
 		gl.viewport(0, 0, canvasRef.value.width, canvasRef.value.height);
-	};
+	}
 
 	gl.clearColor(0, 0, 0, 0);
 	gl.clear(gl.COLOR_BUFFER_BIT);
 
 	gl.useProgram(program);
 
-	// audioLevel.value += (targetAudio - audioLevel.value) * 0.1;
+	const MAX_SCALE = 1.0;
 
-	// gl.uniform1f(gl.getUniformLocation(program, "iAudio"), audioLevel.value);
+	let target = props.audioLevel;
+	if (target > MAX_SCALE) target = MAX_SCALE;
+
+	smoothedAudio.value += (target - smoothedAudio.value) * 0.1;
+
+	console.log(smoothedAudio.value)
+
+	gl.uniform1f(gl.getUniformLocation(program, "iAudio"), smoothedAudio.value);
+
 	gl.uniform3f(gl.getUniformLocation(program, "iResolution"), canvasRef.value.width, canvasRef.value.height, 1);
 	gl.uniform1f(gl.getUniformLocation(program, "iTime"), t * 0.001);
 	gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -148,15 +168,15 @@ const render = (t) => {
 
 	if (!isLoaded.value) {
 		isLoaded.value = true;
-	};
+	}
 
 	animationFrameId = requestAnimationFrame(render);
 
 };
 
 onMounted(() => {
-    initGL();
-    animationFrameId = requestAnimationFrame(render);
+	initGL();
+	animationFrameId = requestAnimationFrame(render);
 });
 
 onUnmounted(() => {

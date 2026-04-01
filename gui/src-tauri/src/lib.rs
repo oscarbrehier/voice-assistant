@@ -30,17 +30,24 @@ pub fn run() {
                     script_dir: scripts_path,
                 };
 
-                match start_engine(paths, Some(22)).await {
+                match start_engine(paths, Some(23)).await {
                     Ok((tx, stream)) => {
                         handle.manage(AudioStream(stream));
                         let mut ui_rx = tx.subscribe();
 
                         while let Ok(msg) = ui_rx.recv().await {
                             if let AudioMessage::Pulse(samples) = msg {
-                                let rms = (samples.iter().map(|x| x * x).sum::<f32>()
-                                    / samples.len() as f32)
-                                    .sqrt();
-                                let _ = handle.emit("audio", rms);
+
+                                let peak = samples.iter().map(|s| s.abs()).fold(0.0, f32::max);
+
+                                let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
+                                let rms = (sum_squares / samples.len() as f32).sqrt();
+
+                                let combined = (rms * 0.7) + (peak * 0.3);
+                                let sensitivity = 20.0;
+                                let volume = (combined * sensitivity).powf(0.6).clamp(0.0, 1.0);
+
+                                let _ = handle.emit("audio", volume);
                             }
                         }
                     }
