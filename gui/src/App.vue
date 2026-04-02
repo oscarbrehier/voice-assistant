@@ -4,21 +4,44 @@ import SpeechBlob from "./components/SpeechBlob.vue";
 import { ref } from "vue";
 import { Settings } from "@lucide/vue";
 
+type State = "idle" | "recording" | "active";
+
+type VolumePacket = { type: "Volume"; payload: number };
+type TranscriptionPacket = { type: "Transcription"; payload: string };
+
+type Packet = VolumePacket | TranscriptionPacket;
+
+type UIEvent = {
+	state: State,
+	data: Packet
+};
+
 let audioLevel = ref(0);
+let state = ref<State>("idle");
 
-listen<number>("audio", (event) => {
+listen<UIEvent>("engine-update", ({ payload }) => {
 
-	audioLevel.value = event.payload;
+	state.value = payload.state;
+
+	if (payload.state == "active" || payload.state == "recording") {
+		toggleExpand(true);
+	} else {
+		toggleExpand(false);
+	};
+
+	if (payload.data.type == "Volume") {
+		audioLevel.value = payload.data.payload;
+	};
 });
 
-const BASE_WIDTH = 240;
+const BASE_WIDTH = 140;
 const EXPANDED_WIDTH = 480;
 
 const isExpanded = ref(false);
 
-function toggleExpand() {
-	isExpanded.value = !isExpanded.value;
-}
+function toggleExpand(overrideState?: boolean) {
+	isExpanded.value = overrideState ?? !isExpanded.value;
+};
 
 </script>
 
@@ -37,7 +60,7 @@ function toggleExpand() {
 
 			</section>
 
-			<button class="p-2 rounded-full text-neutral-300">
+			<button @click="toggleExpand()" class="p-2 rounded-full text-neutral-300">
 				<Settings :size="18" />
 			</button>
 
