@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "gui",
-        "width": 400,
-        "height": 200,
+        "width": 480,
+        "height": 80,
         "decorations": false,
         "transparent": true
       }

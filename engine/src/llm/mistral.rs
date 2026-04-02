@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::llm::{LLMResponse, history::{ConversationHistory}};
 
 pub async fn call_mistral_with_history(history: &mut ConversationHistory) -> anyhow::Result<(LLMResponse, String)> {
-    let mistral_api_key = dotenv::var("MISTRA_API_KEY").expect("MISTRA_API_KEY key not found");
+    let mistral_api_key = std::env::var("MISTRA_API_KEY").expect("MISTRA_API_KEY key not found");
 
     let messages = history.build_history_string();
 

@@ -12,10 +12,14 @@ use cpal::{
     Device, Stream, SupportedStreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
+use tokio::sync::broadcast;
 
 use crate::{
     AudioQueue, State,
-    audio::utils::{has_speech, to_mono},
+    audio::{
+        AudioMessage,
+        utils::{has_speech, to_mono},
+    },
 };
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
@@ -83,16 +87,18 @@ pub fn init_audio_capture(
 pub fn run_vad_loop(
     running: Arc<AtomicBool>,
     audio_buffer: AudioQueue,
-    tx: mpsc::Sender<Vec<f32>>,
+    tx: broadcast::Sender<AudioMessage>,
     sample_rate: usize,
     channels: usize,
     assistant_active: Arc<AtomicBool>,
     state: Arc<AtomicU8>,
 ) {
-    let chunk_duration_spec = 2;
+    let vad_chunk_duration_spec = 2;
+    let pulse_chunk_duration_ms = 50;
     let overlap_duration = 0.25;
 
-    let chunk_size = sample_rate * channels * chunk_duration_spec as usize;
+    let vad_chunk_size = sample_rate * channels * vad_chunk_duration_spec as usize;
+    let pulse_chunk_size = (sample_rate * channels * pulse_chunk_duration_ms) / 1000;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
 
     let mut speech_buffer: Vec<f32> = Vec::new();
@@ -103,7 +109,7 @@ pub fn run_vad_loop(
     let timeout = std::time::Duration::from_secs(20);
 
     while running.load(Ordering::SeqCst) {
-        thread::sleep(std::time::Duration::from_millis(100));
+        thread::sleep(std::time::Duration::from_millis(10));
 
         let current_state = state.load(Ordering::SeqCst);
 
@@ -115,8 +121,15 @@ pub fn run_vad_loop(
 
         let mut queue = audio_buffer.lock().unwrap();
 
-        if queue.len() > (chunk_size as f32 * 1.5) as usize {
-            let to_drop = queue.len() - chunk_size;
+        if queue.len() >= pulse_chunk_size {
+            let pulse_samples: Vec<f32> = queue.iter().take(pulse_chunk_size).copied().collect();
+            let pulse_mono = to_mono(&pulse_samples, channels);
+
+            let _ = tx.send(AudioMessage::Pulse(pulse_mono));
+        }
+
+        if queue.len() > (vad_chunk_size as f32 * 1.5) as usize {
+            let to_drop = queue.len() - vad_chunk_size;
             queue.drain(..to_drop);
         }
 
@@ -128,8 +141,8 @@ pub fn run_vad_loop(
             continue;
         }
 
-        if queue.len() >= chunk_size {
-            let drain_size = chunk_size - overlap_size;
+        if queue.len() >= vad_chunk_size {
+            let drain_size = vad_chunk_size - overlap_size;
             let chunk: Vec<f32> = queue.drain(..drain_size).collect();
 
             let overlap: Vec<f32> = queue.iter().take(overlap_size).copied().collect();
@@ -156,7 +169,8 @@ pub fn run_vad_loop(
 
                     if silence_counter >= silence_threshold_chunks {
                         if !speech_buffer.is_empty() {
-                            let _ = tx.send(std::mem::take(&mut speech_buffer));
+                            let _ =
+                                tx.send(AudioMessage::Speech(std::mem::take(&mut speech_buffer)));
                         }
 
                         if current_state == State::Recording as u8 {

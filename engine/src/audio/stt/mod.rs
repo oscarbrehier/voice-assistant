@@ -1,46 +1,62 @@
 pub mod stt_service;
 
 use std::{
-    fs::OpenOptions,
-    io::Write,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
-        mpsc,
-    },
-    thread,
+    }, thread
 };
 
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, sync::broadcast};
 use tracing::{Level, span};
-use tracing_subscriber::fmt::format;
 
 use crate::{
     ActiveGuard, State,
     actions::{Action, handle_action},
-    audio::{stt::stt_service::STTService, tts::speak, utils::resample_to_16khz},
+    audio::{AudioMessage, stt::stt_service::STTService, tts::{TTSService}, utils::resample_to_16khz},
     commands::CommandMatcher,
     config::Config,
     llm::LLMEngine,
 };
 
+pub struct WorkerContext {
+    pub stt: STTService,
+    pub tts: TTSService,
+    pub command_matcher: CommandMatcher,
+    pub llm_engine: LLMEngine,
+    pub config: Config,
+    pub sample_rate: usize
+}
+
 pub fn spawn_transcription_worker(
-    rx: mpsc::Receiver<Vec<f32>>,
-    mut stt: STTService,
-    command_matcher: CommandMatcher,
-    mut llm_engine: LLMEngine,
+    mut rx: broadcast::Receiver<AudioMessage>,
+    mut ctx: WorkerContext,
     rt: Runtime,
-    sample_rate: usize,
     assistant_active: Arc<AtomicBool>,
-    config: Config,
     state: Arc<AtomicU8>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        while let Ok(chunk) = rx.recv() {
-            let resampled = resample_to_16khz(&chunk, sample_rate);
+        loop {
+            let receive_result = rt.block_on(async { rx.recv().await });
+
+            let message = match receive_result {
+                Ok(data) => data,
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    eprintln!("Worked lagged by {n} chunks.");
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break
+            };
+
+            let chunk = match message {
+                AudioMessage::Speech(data) => data,
+                AudioMessage::Pulse(_) => continue,
+            };
+            
+            let resampled = resample_to_16khz(&chunk, ctx.sample_rate);
 
             let stt_span = span!(Level::INFO, "stt_transcription").entered();
-            let transcription_result = stt.transcribe(&resampled);
+            let transcription_result = ctx.stt.transcribe(&resampled);
             drop(stt_span);
 
             match transcription_result {
@@ -53,7 +69,7 @@ pub fn spawn_transcription_worker(
                     println!("TRANSCRIPTION: {}", trimmed);
 
                     let current_state = state.load(Ordering::SeqCst);
-                    let has_wake_word = trimmed.contains(&config.name);
+                    let has_wake_word = trimmed.contains(&ctx.config.name);
 
                     if has_wake_word || current_state == State::Active as u8 {
                         if has_wake_word {
@@ -61,7 +77,7 @@ pub fn spawn_transcription_worker(
                         }
 
                         let match_span = span!(Level::DEBUG, "command_matching").entered();
-                        let action = command_matcher.match_command(&trimmed);
+                        let action = ctx.command_matcher.match_command(&trimmed);
                         drop(match_span);
 
                         println!("action: {:?}", action);
@@ -69,13 +85,13 @@ pub fn spawn_transcription_worker(
                         if action != Action::Unknown {
                             trimmed.push_str(&format!("command: {:?}", action));
                             let _guard = ActiveGuard::new(assistant_active.clone());
-                            let _ = handle_action(action);
+                            let _ = handle_action(action, &ctx.tts);
                         } else {
                             let llm_span = span!(Level::INFO, "llm_fallback_generation").entered();
                             let _guard = ActiveGuard::new(assistant_active.clone());
 
                             rt.block_on(async {
-                                match llm_engine.generate(&trimmed).await {
+                                match ctx.llm_engine.generate(&trimmed).await {
                                     Ok(response) => {
                                         let action: Action =
                                             serde_json::from_value(serde_json::json!({
@@ -85,14 +101,14 @@ pub fn spawn_transcription_worker(
                                             .unwrap_or(Action::Unknown);
 
                                         if action != Action::Unknown {
-                                            let _ = handle_action(action);
+                                            let _ = handle_action(action, &ctx.tts);
                                         }
 
                                         if !response.message.is_empty() {
                                             let tts_span =
                                                 span!(Level::INFO, "tts_speech").entered();
 
-                                            match speak(&response.message) {
+                                            match ctx.tts.speak(&response.message) {
                                                 Err(e) => {
                                                     eprintln!("failed to generate speech: {e}")
                                                 }

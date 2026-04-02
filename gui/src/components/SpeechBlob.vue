@@ -1,6 +1,7 @@
 <template>
-	<div class="flex items-center justify-center">
-		<canvas ref="canvasRef" class="w-[90vw] h-[90vh] transition-opacity duration-500"
+	<div class="flex items-center justify-center h-full w-full overflow-hidden">
+		<canvas ref="canvasRef"
+			class="max-h-full max-w-full aspect-square object-contain transition-opacity duration-500"
 			:class="isLoaded ? 'opacity-100' : 'opacity-0'"></canvas>
 	</div>
 </template>
@@ -13,10 +14,10 @@
 */
 
 /*
-	* white	        vec4(0,0,0,0)
-	* blues/Cyans	vec4(4,2,0,0)
-	* red/gold	    vec4(0,1,8,0)
-	* purple/Pink	vec4(1,4,1,0)
+	* vec4(0,0,0,0)
+	* vec4(4,2,0,0)
+	* vec4(0,1,8,0)
+	* vec4(1,4,1,0)
 */
 
 import { ref, onMounted, onUnmounted } from 'vue';
@@ -54,6 +55,7 @@ const fsSource = `#version 300 es
 		vec4 finalCol = vec4(0.0);
 		
 		float padding = 1.9 - (iAudio * 0.5); 
+		const vec4 colors = vec4(1,1,2,10);
 
 		for(float m=0.; m<2.; m++) {
 			for(float n=0.; n<2.; n++) {
@@ -72,7 +74,7 @@ const fsSource = `#version 300 es
 					
 					s = length(p = dot(a = normalize(cos(vec3(0,2,4) - iTime*.5 + s*(0.3 + iAudio*0.2))), p) * a - cross(a, p));
 					z += d = min(abs(dot(p, sin(p).yzx)) * .2 + max(d = s - 5., .1), abs(--d) + .2) * .2;
-					O += max(cos(p.x * .6 + vec4(1,4,1,0)), 5. / s / s) / d / d;
+					O += max(cos(p.x * .6 + colors), 5. / s / s) / d / d;
 				}
 				finalCol += tanh(O / 3e4);
 			}
@@ -81,8 +83,8 @@ const fsSource = `#version 300 es
 		finalCol /= 4.0;
 		finalCol.rgb += (hash(gl_FragCoord.xy) - 0.5) * (1.0 / 255.0);
 		
-		float alpha = clamp(length(finalCol.rgb) * (1.2 + iAudio * 0.5), 0.0, 1.0);
-		fragColor = vec4(finalCol.rgb, alpha);
+		float alpha = clamp(length(finalCol.rgb) * (2.2 + iAudio * 0.5), 0.0, 1.0);
+    	fragColor = vec4(finalCol.rgb, alpha);
 	}
 `;
 

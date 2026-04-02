@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     actions::{datetime::get_time, media::play_pause, system::spawn_app},
-    audio::tts::speak,
+    audio::tts::{TTSService},
 };
 
 pub mod datetime;
@@ -45,11 +45,11 @@ pub enum ActionResult {
     Message(String),
 }
 
-pub fn handle_action(action: Action) -> anyhow::Result<()> {
+pub fn handle_action(action: Action, tts: &TTSService) -> anyhow::Result<()> {
     match action.execute()? {
         ActionResult::Success => Ok(()),
         ActionResult::Message(msg) => {
-            speak(&msg)?;
+            tts.speak(&msg)?;
             Ok(())
         }
     }

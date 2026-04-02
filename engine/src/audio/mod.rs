@@ -9,6 +9,12 @@ pub mod stt;
 pub mod tts;
 pub mod utils;
 
+#[derive(Clone, Debug)]
+pub enum AudioMessage {
+    Pulse(Vec<f32>),
+    Speech(Vec<f32>)
+}
+
 pub fn setup_audio_device(
     device_index: Option<usize>,
 ) -> anyhow::Result<(cpal::Device, cpal::SupportedStreamConfig)> {

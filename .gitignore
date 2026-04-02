@@ -10,3 +10,5 @@
 **/transcription.txt
 
 **/.env
+
+*.stackdump

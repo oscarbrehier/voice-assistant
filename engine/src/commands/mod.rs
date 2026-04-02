@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, fs, path::Path};
 
 use regex::Regex;
 use serde::Deserialize;
@@ -40,7 +40,7 @@ pub struct CommandMatcher {
 }
 
 impl CommandMatcher {
-    pub fn from_file(path: &str) -> anyhow::Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let json = fs::read_to_string(path)?;
         let config: CommandConfig = serde_json::from_str(&json)?;
         let config_clone = config.clone();

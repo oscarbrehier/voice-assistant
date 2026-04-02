@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
 
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -22,9 +22,9 @@ pub struct LLMEngine {
 }
 
 impl LLMEngine {
-	pub fn new(config: &Config, commands: &CommandConfig) -> Self {
+	pub fn new<P: AsRef<Path>>(prompt_path: P, config: &Config, commands: &CommandConfig) -> Self {
 
-		let system_prompt = generate_system_prompt(config, commands)
+		let system_prompt = generate_system_prompt(prompt_path, config, commands)
 			.expect("Failed to generate system prompt");
 
 		let last_updated = SystemTime::now()
@@ -59,10 +59,10 @@ impl LLMEngine {
 	}
 }
 
-fn generate_system_prompt(config: &Config, commands: &CommandConfig) -> anyhow::Result<String> {
+fn generate_system_prompt<P: AsRef<Path>>(prompt_path: P, config: &Config, commands: &CommandConfig) -> anyhow::Result<String> {
 
 	let mut commands_str = String::new();
-	let system_prompt = fs::read_to_string("config/system_prompt.txt")
+	let system_prompt = fs::read_to_string(prompt_path)
 		.expect("System prompt template file not found in config");
 
 	for command in &commands.static_commands {

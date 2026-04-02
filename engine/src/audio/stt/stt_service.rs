@@ -1,5 +1,6 @@
 use anyhow::Context;
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 
 pub struct STTService {
@@ -8,9 +9,12 @@ pub struct STTService {
 }
 
 impl STTService {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(script_dir: PathBuf) -> anyhow::Result<Self> {
+
+        let script_path = script_dir.join("stt_service.py");
+
         let mut process = Command::new("python")
-            .arg("python/stt_service.py")
+            .arg(script_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

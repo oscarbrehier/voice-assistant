@@ -1,27 +1,36 @@
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
-    }, time::Duration
+    },
+    time::Duration,
 };
 
 use clap::Parser;
-use tokio::runtime::Runtime;
+use cpal::Stream;
+use tokio::{runtime::Runtime, sync::broadcast};
 
 use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
-        setup_audio_device, stt::stt_service::STTService
-    }, commands::CommandMatcher, config::Config, llm::LLMEngine
+        setup_audio_device,
+        stt::{WorkerContext, stt_service::STTService}, tts::TTSService,
+    },
+    commands::CommandMatcher,
+    config::Config,
+    llm::LLMEngine,
 };
 
-mod config;
 mod actions;
 mod audio;
 mod commands;
+mod config;
 mod llm;
+
+pub use audio::AudioMessage;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -41,7 +50,7 @@ enum State {
 }
 
 struct ActiveGuard {
-    assistant: Arc<AtomicBool>
+    assistant: Arc<AtomicBool>,
 }
 
 impl ActiveGuard {
@@ -58,11 +67,25 @@ impl Drop for ActiveGuard {
     }
 }
 
-fn start_engine() -> anyhow::Result<()> {
-    dotenv::dotenv().ok();
+pub struct EnginePaths {
+    pub config_dir: PathBuf,
+    pub script_dir: PathBuf
+}
 
-
+pub async fn start_engine(
+    paths: EnginePaths,
+    device: Option<usize>,
+) -> anyhow::Result<(broadcast::Sender<AudioMessage>, Stream)> {
     tracing_subscriber::fmt::init();
+
+    let env_file = paths.config_dir.join(".env");
+    let config_file = paths.config_dir.join("config.json");
+    let commands_file = paths.config_dir.join("commands.json");
+    let prompt_path = paths.config_dir.join("system_prompt.txt");
+
+    if let Err(e) = dotenvy::from_path(&env_file) {
+        eprintln!("Failed to load .env from {:?}: {}", env_file, e)
+    }
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -73,38 +96,63 @@ fn start_engine() -> anyhow::Result<()> {
 
     let assistant_active = Arc::new(AtomicBool::new(false));
 
-    let opt = Opt::parse();
-    let config = Config::load("config/config.json")?;
+    let config = Config::load(config_file)?;
 
-    let (device, stream_config) = setup_audio_device(opt.device)?;
+    let (device, stream_config) = setup_audio_device(device)?;
     let sample_rate = stream_config.sample_rate() as usize;
     let channels = stream_config.channels() as usize;
-    
-    let stt = STTService::new()?;
+
+    let stt = STTService::new(paths.script_dir.clone())?;
+    let tts = TTSService::new(paths.script_dir);
     let rt = Runtime::new()?;
-    let command_matcher = CommandMatcher::from_file("config/commands.json")?;
-    let llm_engine = LLMEngine::new(&config, &command_matcher.config);
+
+    let command_matcher = CommandMatcher::from_file(commands_file)?;
+
+    let llm_engine = LLMEngine::new(prompt_path, &config, &command_matcher.config);
 
     let state = Arc::new(AtomicU8::new(State::Idle as u8));
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
-    let (tx, rx) = mpsc::channel::<Vec<f32>>();
+
+    let (tx, rx) = broadcast::channel::<AudioMessage>(16);
+
+    let engine_tx = tx.clone();
 
     let assistant_active_worker = assistant_active.clone();
 
     let stt_state = state.clone();
-    let worker_handle =
-        audio::stt::spawn_transcription_worker(rx, stt, command_matcher, llm_engine, rt, sample_rate, assistant_active_worker, config, stt_state);
+
+    let worker_context = WorkerContext {
+        stt,
+        tts,
+        command_matcher,
+        llm_engine,
+        sample_rate,
+        config,
+    };
+
+    audio::stt::spawn_transcription_worker(
+        rx,
+        worker_context,
+        rt,
+        assistant_active_worker,
+        stt_state,
+    );
 
     let vad_state = state.clone();
-    run_vad_loop(running, audio_buffer, tx, sample_rate, channels, assistant_active, vad_state);
 
-    drop(stream);
+    tokio::task::spawn_blocking(move || {
+        run_vad_loop(
+            running,
+            audio_buffer,
+            engine_tx,
+            sample_rate,
+            channels,
+            assistant_active,
+            vad_state,
+        );
+    });
 
-    if let Err(e) = worker_handle.join() {
-        eprintln!("Transcription thread panicked: {:?}", e);
-    }
-
-    Ok(())
+    Ok((tx, stream))
 }

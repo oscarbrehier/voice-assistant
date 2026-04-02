@@ -1,24 +1,34 @@
-use std::process::Command;
+use std::{path::PathBuf, process::Command};
 
 use anyhow::Ok;
 
-use crate::audio::output::{play_mp3_audio};
+use crate::audio::output::play_mp3_audio;
 
-pub fn speak(text: &str) -> anyhow::Result<()> {
+pub struct TTSService {
+    script_dir: PathBuf,
+}
 
-	
+impl TTSService {
+    pub fn new(script_dir: PathBuf) -> Self {
+        Self { script_dir }
+    }
 
-	let status = Command::new("python")
-		.args(["python/tts_service.py", text])
-		.status()?;
+    pub fn speak(&self, text: &str) -> anyhow::Result<()> {
 
-	if !status.success() {
-		anyhow::bail!("TTS generation failed");
-	}
+		let script_path = self.script_dir.join("tts_service.py");
 
-	let temp_path = "output.mp3";
-	play_mp3_audio(temp_path)?;
+        let status = Command::new("python")
+            .arg(script_path)
+			.arg(text)
+            .status()?;
 
-	Ok(())
+        if !status.success() {
+            anyhow::bail!("TTS generation failed");
+        }
 
+        let temp_path = "output.mp3";
+        play_mp3_audio(temp_path)?;
+
+        Ok(())
+    }
 }
