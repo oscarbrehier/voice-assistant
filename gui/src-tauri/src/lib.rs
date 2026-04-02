@@ -76,6 +76,7 @@ pub fn run() {
 
                         while let Ok(event) = ui_rx.recv().await {
                             let _ = handle.emit("engine-update", &event);
+                            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                         }
                     }
                     Err(e) => {

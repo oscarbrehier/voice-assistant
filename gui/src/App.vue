@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import SpeechBlob from "./components/SpeechBlob.vue";
 import { ref } from "vue";
 import { Settings } from "@lucide/vue";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 type State = "idle" | "recording" | "active";
 
@@ -21,7 +22,11 @@ let state = ref<State>("idle");
 
 listen<UIEvent>("engine-update", ({ payload }) => {
 
+	console.log("payload")
+
 	state.value = payload.state;
+
+	console.log(payload.state)
 
 	if (payload.state == "active" || payload.state == "recording") {
 		toggleExpand(true);
@@ -34,13 +39,26 @@ listen<UIEvent>("engine-update", ({ payload }) => {
 	};
 });
 
+const BASE_HEIGHT = 80;
 const BASE_WIDTH = 140;
 const EXPANDED_WIDTH = 480;
 
 const isExpanded = ref(false);
 
-function toggleExpand(overrideState?: boolean) {
-	isExpanded.value = overrideState ?? !isExpanded.value;
+async function toggleExpand(overrideState?: boolean) {
+	let expand = overrideState ?? !isExpanded.value;
+
+	isExpanded.value = expand;
+
+	if (expand) {
+		getCurrentWindow().setSize(new LogicalSize(EXPANDED_WIDTH, BASE_HEIGHT));
+	} else {
+		setTimeout(() => {
+			if (!isExpanded.value) {
+				getCurrentWindow().setSize(new LogicalSize(BASE_WIDTH, BASE_HEIGHT));
+			};
+		}, 500);
+	};
 };
 
 </script>
