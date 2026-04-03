@@ -17,7 +17,7 @@ use tokio::sync::broadcast;
 use crate::{
     AudioQueue, State,
     audio::{
-        AudioMessage,
+        Packet,
         utils::{has_speech, to_mono},
     },
 };
@@ -87,7 +87,7 @@ pub fn init_audio_capture(
 pub fn run_vad_loop(
     running: Arc<AtomicBool>,
     audio_buffer: AudioQueue,
-    tx: broadcast::Sender<AudioMessage>,
+    tx: broadcast::Sender<Packet>,
     sample_rate: usize,
     channels: usize,
     assistant_active: Arc<AtomicBool>,
@@ -125,7 +125,7 @@ pub fn run_vad_loop(
             let pulse_samples: Vec<f32> = queue.iter().take(pulse_chunk_size).copied().collect();
             let pulse_mono = to_mono(&pulse_samples, channels);
 
-            let _ = tx.send(AudioMessage::Pulse(pulse_mono));
+            let _ = tx.send(Packet::Pulse(pulse_mono));
         }
 
         if queue.len() > (vad_chunk_size as f32 * 1.5) as usize {
@@ -170,7 +170,7 @@ pub fn run_vad_loop(
                     if silence_counter >= silence_threshold_chunks {
                         if !speech_buffer.is_empty() {
                             let _ =
-                                tx.send(AudioMessage::Speech(std::mem::take(&mut speech_buffer)));
+                                tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
                         }
 
                         if current_state == State::Recording as u8 {

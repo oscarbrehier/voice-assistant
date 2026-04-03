@@ -13,7 +13,7 @@ use tracing::{Level, span};
 use crate::{
     ActiveGuard, State,
     actions::{Action, handle_action},
-    audio::{AudioMessage, stt::stt_service::STTService, tts::{TTSService}, utils::resample_to_16khz},
+    audio::{Packet, stt::stt_service::STTService, tts::{TTSService}, utils::resample_to_16khz},
     commands::CommandMatcher,
     config::Config,
     llm::LLMEngine,
@@ -29,7 +29,8 @@ pub struct WorkerContext {
 }
 
 pub fn spawn_transcription_worker(
-    mut rx: broadcast::Receiver<AudioMessage>,
+    tx: broadcast::Sender<Packet>,
+    mut rx: broadcast::Receiver<Packet>,
     mut ctx: WorkerContext,
     rt: Runtime,
     assistant_active: Arc<AtomicBool>,
@@ -49,8 +50,8 @@ pub fn spawn_transcription_worker(
             };
 
             let chunk = match message {
-                AudioMessage::Speech(data) => data,
-                AudioMessage::Pulse(_) => continue,
+                Packet::Speech(data) => data,
+                _ => continue
             };
             
             let resampled = resample_to_16khz(&chunk, ctx.sample_rate);
@@ -67,6 +68,8 @@ pub fn spawn_transcription_worker(
                     }
 
                     println!("TRANSCRIPTION: {}", trimmed);
+
+                    let _ = tx.send(Packet::Transcription(trimmed.clone()));
 
                     let current_state = state.load(Ordering::SeqCst);
                     let has_wake_word = trimmed.contains(&ctx.config.name);

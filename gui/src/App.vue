@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { listen } from "@tauri-apps/api/event";
 import SpeechBlob from "./components/SpeechBlob.vue";
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { Settings } from "@lucide/vue";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 
 type State = "idle" | "recording" | "active";
 
@@ -43,23 +43,64 @@ const BASE_HEIGHT = 80;
 const BASE_WIDTH = 140;
 const EXPANDED_WIDTH = 480;
 
+const isReady = ref(false);
 const isExpanded = ref(false);
 
+const appWindow = getCurrentWindow();
+
 async function toggleExpand(overrideState?: boolean) {
+
+	if (!isReady.value) return;
+
 	let expand = overrideState ?? !isExpanded.value;
+	if (expand === isExpanded.value) return;
+
+	
+	const [factor, physicalPos, physicalSize] = await Promise.all([
+		appWindow.scaleFactor(),
+		appWindow.outerPosition(),
+		appWindow.outerSize()
+	]);
+	
+	const logicalPos = physicalPos.toLogical(factor);
+	const logicalSize = physicalSize.toLogical(factor);
+
+	const rightEdge = logicalPos.x + logicalSize.width;
 
 	isExpanded.value = expand;
 
 	if (expand) {
-		getCurrentWindow().setSize(new LogicalSize(EXPANDED_WIDTH, BASE_HEIGHT));
+
+		const newX = rightEdge - EXPANDED_WIDTH;
+
+		appWindow.setPosition(new LogicalPosition(newX, logicalPos.y));
+		appWindow.setSize(new LogicalSize(EXPANDED_WIDTH, BASE_HEIGHT));
+
 	} else {
-		setTimeout(() => {
+
+		setTimeout(async () => {
+
 			if (!isExpanded.value) {
-				getCurrentWindow().setSize(new LogicalSize(BASE_WIDTH, BASE_HEIGHT));
+
+				const newX = rightEdge - BASE_WIDTH;
+
+				appWindow.setPosition(new LogicalPosition(newX, logicalPos.y));
+				appWindow.setSize(new LogicalSize(BASE_WIDTH, BASE_HEIGHT));
+
 			};
+
 		}, 500);
+
 	};
 };
+
+onMounted(() => {
+	appWindow.setResizable(false);
+
+	setTimeout(async () => {
+		isReady.value = true;
+	}, 500);
+});
 
 </script>
 

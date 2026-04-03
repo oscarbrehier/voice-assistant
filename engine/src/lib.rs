@@ -11,13 +11,15 @@ use std::{
 
 use clap::Parser;
 use cpal::Stream;
+use serde::Serialize;
 use tokio::{runtime::Runtime, sync::broadcast};
 
 use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
         setup_audio_device,
-        stt::{WorkerContext, stt_service::STTService}, tts::TTSService,
+        stt::{WorkerContext, stt_service::STTService},
+        tts::TTSService,
     },
     commands::CommandMatcher,
     config::Config,
@@ -30,7 +32,7 @@ mod commands;
 mod config;
 mod llm;
 
-pub use audio::AudioMessage;
+pub use audio::Packet;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -41,9 +43,10 @@ struct Opt {
 
 type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Serialize, Clone, Debug)]
+#[serde(rename_all = "lowercase")]
 #[repr(u8)]
-enum State {
+pub enum State {
     Idle = 0,
     Recording = 1,
     Active = 2,
@@ -69,13 +72,19 @@ impl Drop for ActiveGuard {
 
 pub struct EnginePaths {
     pub config_dir: PathBuf,
-    pub script_dir: PathBuf
+    pub script_dir: PathBuf,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct EngineEvent {
+    pub state: State,
+    pub data: Packet,
 }
 
 pub async fn start_engine(
     paths: EnginePaths,
     device: Option<usize>,
-) -> anyhow::Result<(broadcast::Sender<AudioMessage>, Stream)> {
+) -> anyhow::Result<(broadcast::Sender<EngineEvent>, Stream)> {
     tracing_subscriber::fmt::init();
 
     let env_file = paths.config_dir.join(".env");
@@ -115,9 +124,35 @@ pub async fn start_engine(
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
 
-    let (tx, rx) = broadcast::channel::<AudioMessage>(16);
+    let (tx_internal, rx_internal) = broadcast::channel::<Packet>(16);
+    let (tx_external, _) = broadcast::channel::<EngineEvent>(16);
 
-    let engine_tx = tx.clone();
+    let bridge_state = state.clone();
+    let bridge_tx_ext = tx_external.clone();
+    let mut bridge_rx_int = tx_internal.subscribe();
+
+    tokio::spawn(async move {
+        while let Ok(content) = bridge_rx_int.recv().await {
+            let s_u8 = bridge_state.load(Ordering::SeqCst);
+
+            let current_state = match s_u8 {
+                1 => State::Recording,
+                2 => State::Active,
+                _ => State::Idle
+            };
+            
+            let packet = content.process();
+
+            let event = EngineEvent {
+                state: current_state,
+                data: packet
+            };
+
+            if let Err(_) = bridge_tx_ext.send(event) {
+                break ;
+            };
+        }
+    });
 
     let assistant_active_worker = assistant_active.clone();
 
@@ -132,14 +167,18 @@ pub async fn start_engine(
         config,
     };
 
+    let worker_tx = tx_internal.clone();
+
     audio::stt::spawn_transcription_worker(
-        rx,
+        worker_tx,
+        rx_internal,
         worker_context,
         rt,
         assistant_active_worker,
         stt_state,
     );
 
+    let engine_tx = tx_internal.clone();
     let vad_state = state.clone();
 
     tokio::task::spawn_blocking(move || {
@@ -154,5 +193,5 @@ pub async fn start_engine(
         );
     });
 
-    Ok((tx, stream))
+    Ok((tx_external, stream))
 }

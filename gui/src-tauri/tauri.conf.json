@@ -16,7 +16,8 @@
         "width": 480,
         "height": 80,
         "decorations": false,
-        "transparent": true
+        "transparent": true,
+        "alwaysOnTop": true
       }
     ],
     "security": {
