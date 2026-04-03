@@ -5,7 +5,7 @@ import { onMounted, ref } from "vue";
 import { Ellipsis, PinOffIcon } from "@lucide/vue";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 
-type State = "idle" | "recording" | "active";
+type State = "idle" | "recording" | "active" | "processing" | "speaking";
 
 type VolumePacket = { type: "Volume"; payload: number };
 type TranscriptionPacket = { type: "Transcription"; payload: string };
