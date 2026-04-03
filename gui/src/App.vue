@@ -7,8 +7,8 @@ import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/
 
 type State = "idle" | "recording" | "active" | "processing" | "speaking";
 
-type VolumePacket = { type: "Volume"; payload: number };
-type TranscriptionPacket = { type: "Transcription"; payload: string };
+type VolumePacket = { type: "Volume"; content: number };
+type TranscriptionPacket = { type: "Transcription"; content: string };
 
 type Packet = VolumePacket | TranscriptionPacket;
 
@@ -19,14 +19,11 @@ type UIEvent = {
 
 let audioLevel = ref(0);
 let state = ref<State>("idle");
+let transcription = ref<string | null>(null);
 
 listen<UIEvent>("engine-update", ({ payload }) => {
 
-	console.log("payload")
-
 	state.value = payload.state;
-
-	console.log(payload.state)
 
 	if (payload.state == "active" || payload.state == "recording") {
 		toggleExpand(true);
@@ -34,9 +31,18 @@ listen<UIEvent>("engine-update", ({ payload }) => {
 		toggleExpand(false);
 	};
 
-	if (payload.data.type == "Volume") {
-		audioLevel.value = payload.data.payload;
+	switch (payload.data.type) {
+		case "Volume":
+			audioLevel.value = payload.data.content;
+			break;
+	
+		case "Transcription":
+			transcription.value = payload.data.content;
+			console.log(transcription.value);
+			break;
 	};
+
+
 });
 
 const BASE_HEIGHT = 80;
@@ -118,6 +124,10 @@ onMounted(() => {
 				<SpeechBlob :audio-level="audioLevel" class="pointer-events-none" />
 
 			</section>
+
+			<div v-if="isExpanded" class="flex-1 h-auto">
+				<p class="text-neutral-100">{{ transcription }}</p>
+			</div>
 
 			<div class="flex space-x-2">
 				<button @click="toggleExpand()" class="rounded-full text-neutral-300 bg-neutral-900 p-2.5">

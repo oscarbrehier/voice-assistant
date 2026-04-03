@@ -12,15 +12,6 @@ mod commands;
 
 struct AudioStream(cpal::Stream);
 
-#[derive(Serialize, Clone, Debug)]
-pub struct UIEvent {
-    pub state: State,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcription: Option<String>,
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

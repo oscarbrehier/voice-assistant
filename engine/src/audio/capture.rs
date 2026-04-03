@@ -15,7 +15,7 @@ use cpal::{
 use tokio::sync::broadcast;
 
 use crate::{
-    AudioQueue, State,
+    State,
     audio::{
         Packet,
         utils::{has_speech, to_mono},
@@ -86,7 +86,7 @@ pub fn init_audio_capture(
 
 pub fn run_vad_loop(
     running: Arc<AtomicBool>,
-    audio_buffer: AudioQueue,
+    audio_buffer: AudioBuffer,
     tx: broadcast::Sender<Packet>,
     sample_rate: usize,
     channels: usize,
@@ -108,24 +108,35 @@ pub fn run_vad_loop(
     let mut last_speech_instant = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(20);
 
+    let max_speech_duration_secs = 30;
+    let max_speech_samples = channels * sample_rate * max_speech_duration_secs;
+
     while running.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(10));
 
         let current_state = state.load(Ordering::SeqCst);
 
-        if current_state == State::Active as u8 {
-            if last_speech_instant.elapsed() > timeout {
-                state.store(State::Idle as u8, Ordering::SeqCst);
-            }
+        if current_state == State::Processing as u8 || current_state == State::Speaking as u8 {
+            let mut queue = audio_buffer.lock().unwrap();
+            queue.clear();
+            speech_buffer.clear();
+            continue;
         }
 
         let mut queue = audio_buffer.lock().unwrap();
 
         if queue.len() >= pulse_chunk_size {
-            let pulse_samples: Vec<f32> = queue.iter().take(pulse_chunk_size).copied().collect();
+            let pulse_samples: Vec<f32> =
+                queue.iter().rev().take(pulse_chunk_size).copied().collect();
             let pulse_mono = to_mono(&pulse_samples, channels);
 
             let _ = tx.send(Packet::Pulse(pulse_mono));
+        }
+
+        if current_state == State::Active as u8 {
+            if last_speech_instant.elapsed() > timeout {
+                State::broadcast(State::Idle, &state, &tx);
+            }
         }
 
         if queue.len() > (vad_chunk_size as f32 * 1.5) as usize {
@@ -158,7 +169,7 @@ pub fn run_vad_loop(
                 last_speech_instant = std::time::Instant::now();
 
                 if current_state == State::Idle as u8 {
-                    state.store(State::Recording as u8, Ordering::SeqCst);
+                    State::broadcast(State::Recording, &state, &tx);
                 }
 
                 speech_buffer.extend(mono);
@@ -169,12 +180,11 @@ pub fn run_vad_loop(
 
                     if silence_counter >= silence_threshold_chunks {
                         if !speech_buffer.is_empty() {
-                            let _ =
-                                tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
+                            let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
                         }
 
                         if current_state == State::Recording as u8 {
-                            state.store(State::Idle as u8, Ordering::SeqCst);
+                            State::broadcast(State::Idle, &state, &tx);
                         }
 
                         silence_counter = 0;
@@ -183,6 +193,15 @@ pub fn run_vad_loop(
                     }
                 }
             }
+        }
+
+        if speech_buffer.len() > max_speech_samples {
+            println!(
+                "buffer safety triggered: cleared {} samples",
+                speech_buffer.len()
+            );
+            speech_buffer.clear();
+            State::broadcast(State::Idle, &state, &tx);
         }
     }
 }

@@ -4,13 +4,15 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
-        mpsc,
+        mpsc::{self, Sender},
     },
     time::Duration,
 };
 
 use clap::Parser;
 use cpal::Stream;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
 use serde::Serialize;
 use tokio::{runtime::Runtime, sync::broadcast};
 
@@ -41,32 +43,47 @@ struct Opt {
     device: Option<usize>,
 }
 
-type AudioQueue = Arc<Mutex<VecDeque<f32>>>;
-
-#[derive(PartialEq, Serialize, Clone, Debug)]
+#[derive(PartialEq, Serialize, Clone, Debug, FromPrimitive)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum State {
     Idle = 0,
     Recording = 1,
     Active = 2,
+    Processing = 3,
+    Speaking = 4,
+}
+
+impl State {
+    fn broadcast(
+        new_state: State,
+        atomic_state: &Arc<AtomicU8>,
+        tx: &broadcast::Sender<Packet>,
+    ) {
+        atomic_state.store(new_state.clone() as u8, Ordering::SeqCst);
+        let _ = tx.send(Packet::State(new_state));
+    }
 }
 
 struct ActiveGuard {
     assistant: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
+    tx: broadcast::Sender<Packet>
 }
 
 impl ActiveGuard {
-    fn new(assistant: Arc<AtomicBool>) -> Self {
+    fn new(assistant: Arc<AtomicBool>, state: Arc<AtomicU8>, tx: broadcast::Sender<Packet>) -> Self {
         assistant.store(true, Ordering::SeqCst);
-        Self { assistant }
+        Self { assistant, state, tx }
     }
 }
 
 impl Drop for ActiveGuard {
     fn drop(&mut self) {
         std::thread::sleep(Duration::from_millis(500));
+
         self.assistant.store(false, Ordering::SeqCst);
+        State::broadcast(State::Idle, &self.state, &self.tx);
     }
 }
 
@@ -137,11 +154,7 @@ pub async fn start_engine(
                 Ok(content) => {
                     let s_u8 = bridge_state.load(Ordering::SeqCst);
 
-                    let current_state = match s_u8 {
-                        1 => State::Recording,
-                        2 => State::Active,
-                        _ => State::Idle,
-                    };
+                    let current_state = State::from_u8(s_u8).unwrap_or(State::Idle);
 
                     let packet = content.process();
 

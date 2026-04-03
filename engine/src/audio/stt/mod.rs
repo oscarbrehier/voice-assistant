@@ -64,19 +64,18 @@ pub fn spawn_transcription_worker(
                 Ok(transcription) => {
                     let mut trimmed = transcription.trim().to_lowercase().to_string();
                     if trimmed.is_empty() {
-                        return;
+                        continue;
                     }
 
                     println!("TRANSCRIPTION: {}", trimmed);
 
                     let _ = tx.send(Packet::Transcription(trimmed.clone()));
 
-                    let current_state = state.load(Ordering::SeqCst);
                     let has_wake_word = trimmed.contains(&ctx.config.name);
 
-                    if has_wake_word || current_state == State::Active as u8 {
+                    if has_wake_word || state.load(Ordering::SeqCst) == State::Active as u8 {
                         if has_wake_word {
-                            state.store(State::Active as u8, Ordering::SeqCst);
+                            State::broadcast(State::Active, &state, &tx);
                         }
 
                         let match_span = span!(Level::DEBUG, "command_matching").entered();
@@ -85,13 +84,15 @@ pub fn spawn_transcription_worker(
 
                         println!("action: {:?}", action);
 
+                        State::broadcast(State::Processing, &state, &tx);
+
                         if action != Action::Unknown {
                             trimmed.push_str(&format!("command: {:?}", action));
-                            let _guard = ActiveGuard::new(assistant_active.clone());
-                            let _ = handle_action(action, &ctx.tts);
+                            let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
+                            let _ = handle_action(action, &ctx.tts, Arc::clone(&state), &tx);
                         } else {
                             let llm_span = span!(Level::INFO, "llm_fallback_generation").entered();
-                            let _guard = ActiveGuard::new(assistant_active.clone());
+                            let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
 
                             rt.block_on(async {
                                 match ctx.llm_engine.generate(&trimmed).await {
@@ -104,14 +105,14 @@ pub fn spawn_transcription_worker(
                                             .unwrap_or(Action::Unknown);
 
                                         if action != Action::Unknown {
-                                            let _ = handle_action(action, &ctx.tts);
+                                            let _ = handle_action(action, &ctx.tts, Arc::clone(&state), &tx);
                                         }
 
                                         if !response.message.is_empty() {
                                             let tts_span =
                                                 span!(Level::INFO, "tts_speech").entered();
 
-                                            match ctx.tts.speak(&response.message) {
+                                            match ctx.tts.speak(&response.message, Arc::clone(&state), &tx) {
                                                 Err(e) => {
                                                     eprintln!("failed to generate speech: {e}")
                                                 }

@@ -1,7 +1,7 @@
 use rodio::DeviceTrait;
 use serde::Serialize;
 
-use crate::audio::devices::{list_input_devices, select_device_by_index};
+use crate::{State, audio::devices::{list_input_devices, select_device_by_index}};
 
 pub mod capture;
 pub mod devices;
@@ -11,12 +11,13 @@ pub mod tts;
 pub mod utils;
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "type", content = "payload")]
+#[serde(tag = "type", content = "content")]
 pub enum Packet {
     Pulse(Vec<f32>),
     Speech(Vec<f32>),
     Volume(f32),
     Transcription(String),
+    State(State)
 }
 
 impl Packet {

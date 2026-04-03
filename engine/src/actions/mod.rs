@@ -1,8 +1,10 @@
+use std::sync::{Arc, atomic::AtomicU8};
+
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 use crate::{
-    actions::{datetime::get_time, media::play_pause, system::spawn_app},
-    audio::tts::{TTSService},
+    Packet, actions::{datetime::get_time, media::play_pause, system::spawn_app}, audio::tts::TTSService
 };
 
 pub mod datetime;
@@ -45,11 +47,11 @@ pub enum ActionResult {
     Message(String),
 }
 
-pub fn handle_action(action: Action, tts: &TTSService) -> anyhow::Result<()> {
+pub fn handle_action(action: Action, tts: &TTSService, state: Arc<AtomicU8>, sender: &broadcast::Sender<Packet>) -> anyhow::Result<()> {
     match action.execute()? {
         ActionResult::Success => Ok(()),
         ActionResult::Message(msg) => {
-            tts.speak(&msg)?;
+            tts.speak(&msg, state, sender)?;
             Ok(())
         }
     }

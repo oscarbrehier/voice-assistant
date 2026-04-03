@@ -1223,6 +1223,8 @@ dependencies = [
  "hound",
  "libc",
  "livekit-wakeword",
+ "num-derive",
+ "num-traits",
  "regex",
  "reqwest",
  "rodio",
@@ -1870,6 +1872,8 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "engine",
+ "num-derive",
+ "num-traits",
  "serde",
  "serde_json",
  "tauri",

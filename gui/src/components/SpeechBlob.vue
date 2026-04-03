@@ -159,8 +159,6 @@ const render = (t: number): void => {
 
 	smoothedAudio.value += (target - smoothedAudio.value) * 0.1;
 
-	console.log(smoothedAudio.value)
-
 	gl.uniform1f(gl.getUniformLocation(program, "iAudio"), smoothedAudio.value);
 
 	gl.uniform3f(gl.getUniformLocation(program, "iResolution"), canvasRef.value.width, canvasRef.value.height, 1);
