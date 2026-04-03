@@ -5,7 +5,15 @@ import { onMounted, ref } from "vue";
 import { Ellipsis, PinOffIcon } from "@lucide/vue";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 
-type State = "idle" | "recording" | "active" | "processing" | "speaking";
+const STATES = {
+	IDLE: "idle",
+	RECORDING: "recording",
+	ACTIVE: "active",
+	PROCESSING: "processing",
+	SPEAKING: "speaking"
+} as const;
+
+type State = typeof STATES[keyof typeof STATES];
 
 type VolumePacket = { type: "Volume"; content: number };
 type TranscriptionPacket = { type: "Transcription"; content: string };
@@ -24,8 +32,11 @@ let transcription = ref<string | null>(null);
 listen<UIEvent>("engine-update", ({ payload }) => {
 
 	state.value = payload.state;
+	console.log(payload.state)
 
-	if (payload.state == "active" || payload.state == "recording") {
+	const shouldExpand = payload.state != "idle";
+
+	if (shouldExpand) {
 		toggleExpand(true);
 	} else {
 		toggleExpand(false);
@@ -35,10 +46,10 @@ listen<UIEvent>("engine-update", ({ payload }) => {
 		case "Volume":
 			audioLevel.value = payload.data.content;
 			break;
-	
+
 		case "Transcription":
 			transcription.value = payload.data.content;
-			console.log(transcription.value);
+
 			break;
 	};
 
@@ -126,7 +137,10 @@ onMounted(() => {
 			</section>
 
 			<div v-if="isExpanded" class="flex-1 h-auto">
-				<p class="text-neutral-100">{{ transcription }}</p>
+				<p class="text-neutral-100">
+					<span class="text-neutral-400">You:</span>
+					{{ transcription }}
+				</p>
 			</div>
 
 			<div class="flex space-x-2">
