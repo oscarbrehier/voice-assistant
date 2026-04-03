@@ -2,7 +2,7 @@
 import { listen } from "@tauri-apps/api/event";
 import SpeechBlob from "./components/SpeechBlob.vue";
 import { onMounted, ref } from "vue";
-import { Settings } from "@lucide/vue";
+import { Ellipsis, PinOffIcon } from "@lucide/vue";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 
 type State = "idle" | "recording" | "active";
@@ -40,7 +40,7 @@ listen<UIEvent>("engine-update", ({ payload }) => {
 });
 
 const BASE_HEIGHT = 80;
-const BASE_WIDTH = 140;
+const BASE_WIDTH = 200;
 const EXPANDED_WIDTH = 480;
 
 const isReady = ref(false);
@@ -55,13 +55,13 @@ async function toggleExpand(overrideState?: boolean) {
 	let expand = overrideState ?? !isExpanded.value;
 	if (expand === isExpanded.value) return;
 
-	
+
 	const [factor, physicalPos, physicalSize] = await Promise.all([
 		appWindow.scaleFactor(),
 		appWindow.outerPosition(),
 		appWindow.outerSize()
 	]);
-	
+
 	const logicalPos = physicalPos.toLogical(factor);
 	const logicalSize = physicalSize.toLogical(factor);
 
@@ -107,7 +107,7 @@ onMounted(() => {
 <template>
 	<main class="w-full h-full flex justify-end">
 		<section
-			class="h-screen bg-neutral-900 rounded-[3rem] flex justify-between items-center border border-neutral-700 pr-4"
+			class="h-screen bg-neutral-900 rounded-[3rem] flex justify-between items-center border border-neutral-800 pr-4 relative overflow-hidden z-10"
 			:class="[
 				'transition-all duration-500 ease-in-out',
 			]" :style="{ width: (isExpanded ? EXPANDED_WIDTH : BASE_WIDTH) + 'px' }" data-tauri-drag-region>
@@ -119,9 +119,15 @@ onMounted(() => {
 
 			</section>
 
-			<button @click="toggleExpand()" class="p-2 rounded-full text-neutral-300">
-				<Settings :size="18" />
-			</button>
+			<div class="flex space-x-2">
+				<button @click="toggleExpand()" class="rounded-full text-neutral-300 bg-neutral-900 p-2.5">
+					<PinOffIcon :size="15" />
+				</button>
+
+				<button @click="toggleExpand()" class="rounded-full text-neutral-300  bg-neutral-900 p-2.5">
+					<Ellipsis :size="18" />
+				</button>
+			</div>
 
 		</section>
 	</main>
@@ -131,5 +137,16 @@ onMounted(() => {
 html,
 body {
 	background: transparent !important;
+}
+
+.deep-purple-island {
+	background-color: #0F0A1F;
+
+	background-image:
+		radial-gradient(at 40% 0%, rgba(183, 64, 220, 0.20) 0%, transparent 70%),
+		radial-gradient(at 50% 100%, rgba(32, 7, 114, 0.40) 0%, transparent 50%);
+
+	background-blend-mode: screen;
+	box-shadow: inset 0 0.5px 1px rgba(255, 255, 255, 0.15);
 }
 </style>

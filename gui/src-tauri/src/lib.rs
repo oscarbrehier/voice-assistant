@@ -74,8 +74,14 @@ pub fn run() {
                         handle.manage(AudioStream(stream));
                         let mut ui_rx = tx.subscribe();
 
-                        while let Ok(event) = ui_rx.recv().await {
-                            let _ = handle.emit("engine-update", &event);
+                        loop {
+                            match ui_rx.recv().await {
+                                Ok(event) => {
+                                    let _ = handle.emit("engine-update", &event);
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(_) => break,
+                            }
                             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                         }
                     }

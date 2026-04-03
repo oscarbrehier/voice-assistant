@@ -55,7 +55,7 @@ const fsSource = `#version 300 es
 		vec4 finalCol = vec4(0.0);
 		
 		float padding = 1.9 - (iAudio * 0.5); 
-		const vec4 colors = vec4(1,1,2,10);
+		const vec4 colors = vec4(14,1,2,10);
 
 		for(float m=0.; m<2.; m++) {
 			for(float n=0.; n<2.; n++) {

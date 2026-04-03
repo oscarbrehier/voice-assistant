@@ -124,33 +124,39 @@ pub async fn start_engine(
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
 
-    let (tx_internal, rx_internal) = broadcast::channel::<Packet>(16);
-    let (tx_external, _) = broadcast::channel::<EngineEvent>(16);
+    let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
+    let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
 
     let bridge_state = state.clone();
     let bridge_tx_ext = tx_external.clone();
     let mut bridge_rx_int = tx_internal.subscribe();
 
     tokio::spawn(async move {
-        while let Ok(content) = bridge_rx_int.recv().await {
-            let s_u8 = bridge_state.load(Ordering::SeqCst);
+        loop {
+            match bridge_rx_int.recv().await {
+                Ok(content) => {
+                    let s_u8 = bridge_state.load(Ordering::SeqCst);
 
-            let current_state = match s_u8 {
-                1 => State::Recording,
-                2 => State::Active,
-                _ => State::Idle
-            };
-            
-            let packet = content.process();
+                    let current_state = match s_u8 {
+                        1 => State::Recording,
+                        2 => State::Active,
+                        _ => State::Idle,
+                    };
 
-            let event = EngineEvent {
-                state: current_state,
-                data: packet
-            };
+                    let packet = content.process();
 
-            if let Err(_) = bridge_tx_ext.send(event) {
-                break ;
-            };
+                    let event = EngineEvent {
+                        state: current_state,
+                        data: packet,
+                    };
+
+                    if let Err(_) = bridge_tx_ext.send(event) {
+                        break;
+                    };
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
         }
     });
 
