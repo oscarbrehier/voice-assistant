@@ -1,10 +1,8 @@
 use std::{
-    collections::VecDeque,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
-        mpsc::{self, Sender},
     },
     time::Duration,
 };
@@ -14,7 +12,7 @@ use cpal::Stream;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::Serialize;
-use tokio::{runtime::Runtime, sync::broadcast};
+use tokio::{sync::broadcast};
 
 use crate::{
     audio::{
@@ -128,9 +126,8 @@ pub async fn start_engine(
     let sample_rate = stream_config.sample_rate() as usize;
     let channels = stream_config.channels() as usize;
 
-    let stt = STTService::new(paths.script_dir.clone())?;
+    let stt = STTService::new(paths.script_dir.clone()).await?;
     let tts = TTSService::new(paths.script_dir);
-    let rt = Runtime::new()?;
 
     let command_matcher = CommandMatcher::from_file(commands_file)?;
 
@@ -192,7 +189,6 @@ pub async fn start_engine(
         worker_tx,
         rx_internal,
         worker_context,
-        rt,
         assistant_active_worker,
         stt_state,
     );
