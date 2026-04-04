@@ -172,8 +172,18 @@ pub fn run_vad_loop(
                     State::broadcast(State::Recording, &state, &tx);
                 }
 
-                speech_buffer.extend(mono);
-                silence_counter = 0;
+                if speech_buffer.len() + mono.len() > max_speech_samples {
+                    if !speech_buffer.is_empty() {
+                        let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
+                    }
+
+                    speech_buffer = mono;
+                    silence_counter = 0;
+                } else {
+                    speech_buffer.extend(mono);
+                    silence_counter = 0;
+                }
+
             } else {
                 if current_state == State::Recording as u8 || current_state == State::Active as u8 {
                     silence_counter += 1;
@@ -195,6 +205,7 @@ pub fn run_vad_loop(
             }
         }
 
+        // can be removed (fallback for the time being)
         if speech_buffer.len() > max_speech_samples {
             println!(
                 "buffer safety triggered: cleared {} samples",

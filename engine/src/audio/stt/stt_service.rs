@@ -10,7 +10,6 @@ pub struct STTService {
 
 impl STTService {
     pub fn new(script_dir: PathBuf) -> anyhow::Result<Self> {
-
         let script_path = script_dir.join("stt_service.py");
 
         let mut process = Command::new("python")
@@ -35,20 +34,27 @@ impl STTService {
     }
 
     pub fn transcribe(&mut self, audio: &[f32]) -> anyhow::Result<String> {
+        if audio.is_empty() {
+            return Ok("".to_string());
+        }
+
         let stdin = self.process.stdin.as_mut().context("failed to get stdin")?;
 
         writeln!(stdin, "AUDIO {}", audio.len())?;
         stdin.flush()?;
 
-        let bytes: &[u8] =
-            unsafe { std::slice::from_raw_parts(audio.as_ptr() as *const u8, audio.len() * 4) };
+        let mut bytes = Vec::with_capacity(audio.len() * 4);
+        for &samples in audio {
+            bytes.extend_from_slice(&samples.to_le_bytes());
+        }
 
         const CHUNK_SIZE: usize = 8192;
         for chunk in bytes.chunks(CHUNK_SIZE) {
             stdin.write_all(chunk)?;
-            stdin.flush()?;
-            std::thread::sleep(std::time::Duration::from_micros(100));
+            std::thread::sleep(std::time::Duration::from_micros(50));
         }
+
+        stdin.flush()?;
 
         let mut result = String::new();
         self.reader.read_line(&mut result)?;
