@@ -54,7 +54,7 @@ pub fn spawn_transcription_worker(
 
             match transcription_result {
                 Ok(transcription) => {
-                    let mut trimmed = transcription.trim().to_lowercase().to_string();
+                    let trimmed = transcription.trim().to_lowercase().to_string();
                     if trimmed.is_empty() {
                         continue;
                     }

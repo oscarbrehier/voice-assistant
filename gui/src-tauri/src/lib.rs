@@ -29,13 +29,13 @@ pub fn run() {
 
                 let margin = 24;
 
-                let bottom_right = PhysicalPosition {
+                let top_right = PhysicalPosition {
                     x: screen_pos.x + (screen_size.width as i32 - window_size.width as i32)
                         - margin,
                     y: screen_pos.y + margin,
                 };
 
-                window.set_position(bottom_right).unwrap();
+                window.set_position(top_right).unwrap();
             }
 
             window.set_shadow(false).unwrap();

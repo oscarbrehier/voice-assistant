@@ -144,9 +144,14 @@ pub async fn start_engine(
     let bridge_state = state.clone();
     let bridge_tx_ext = tx_external.clone();
     let mut bridge_rx_int = tx_internal.subscribe();
+    let bridge_running = running.clone();
 
     tokio::spawn(async move {
         loop {
+            if !bridge_running.load(Ordering::SeqCst) {
+                break ;
+            }
+
             match bridge_rx_int.recv().await {
                 Ok(content) => {
                     let s_u8 = bridge_state.load(Ordering::SeqCst);

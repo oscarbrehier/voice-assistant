@@ -119,6 +119,7 @@ pub fn run_vad_loop(
         if current_state == State::Processing as u8 || current_state == State::Speaking as u8 {
             let mut queue = audio_buffer.lock().unwrap();
             queue.clear();
+            drop(queue);
             speech_buffer.clear();
             continue;
         }

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { listen } from "@tauri-apps/api/event";
 import SpeechBlob from "./components/SpeechBlob.vue";
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, ref } from "vue";
 import { Ellipsis, PinOffIcon } from "@lucide/vue";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 
 const STATES = {
 	IDLE: "idle",
@@ -71,44 +72,24 @@ async function toggleExpand(overrideState?: boolean) {
 
 	let expand = overrideState ?? !isExpanded.value;
 	if (expand === isExpanded.value) return;
-
-
-	const [factor, physicalPos, physicalSize] = await Promise.all([
-		appWindow.scaleFactor(),
-		appWindow.outerPosition(),
-		appWindow.outerSize()
-	]);
-
-	const logicalPos = physicalPos.toLogical(factor);
-	const logicalSize = physicalSize.toLogical(factor);
-
-	const rightEdge = logicalPos.x + logicalSize.width;
-
+	
 	isExpanded.value = expand;
 
+	const targetWidth = expand ? EXPANDED_WIDTH : BASE_WIDTH;
+
 	if (expand) {
-
-		const newX = rightEdge - EXPANDED_WIDTH;
-
-		appWindow.setPosition(new LogicalPosition(newX, logicalPos.y));
-		appWindow.setSize(new LogicalSize(EXPANDED_WIDTH, BASE_HEIGHT));
-
+		await invoke("set_window_size", { width: targetWidth, height: BASE_HEIGHT });
 	} else {
-
 		setTimeout(async () => {
 
 			if (!isExpanded.value) {
-
-				const newX = rightEdge - BASE_WIDTH;
-
-				appWindow.setPosition(new LogicalPosition(newX, logicalPos.y));
-				appWindow.setSize(new LogicalSize(BASE_WIDTH, BASE_HEIGHT));
-
+				await invoke("set_window_size", { width: targetWidth, height: BASE_HEIGHT });
 			};
 
 		}, 500);
 
 	};
+
 };
 
 onMounted(() => {
@@ -136,12 +117,12 @@ onMounted(() => {
 
 			</section>
 
-			<div v-if="isExpanded" class="flex-1 h-auto">
+			<!-- <div v-if="isExpanded" class="flex-1 h-auto">
 				<p class="text-neutral-100">
 					<span class="text-neutral-400">You:</span>
 					{{ transcription }}
 				</p>
-			</div>
+			</div> -->
 
 			<div class="flex space-x-2">
 				<button @click="toggleExpand()" class="rounded-full text-neutral-300 bg-neutral-900 p-2.5">
