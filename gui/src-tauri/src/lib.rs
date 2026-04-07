@@ -54,6 +54,8 @@ pub fn run() {
                 .expect("failed to get resource dir")
                 .join("python");
 
+            let _ = window.hide();
+
             tauri::async_runtime::spawn(async move {
                 let paths = EnginePaths {
                     config_dir: config_path,
@@ -63,11 +65,25 @@ pub fn run() {
                 match start_engine(paths, Some(22)).await {
                     Ok((tx, stream)) => {
                         handle.manage(AudioStream(stream));
+
                         let mut ui_rx = tx.subscribe();
+                        let mut is_visible = false;
 
                         loop {
                             match ui_rx.recv().await {
                                 Ok(event) => {
+                                    let state = event.state.clone() as u8;
+                                    let should_be_visible = state > 0;
+
+                                    if should_be_visible != is_visible {
+                                        if should_be_visible {
+                                            let _ = window.show();
+                                        } else {
+                                            let _ = window.hide();
+                                        }
+                                        is_visible = should_be_visible;
+                                    };
+
                                     let _ = handle.emit("engine-update", &event);
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

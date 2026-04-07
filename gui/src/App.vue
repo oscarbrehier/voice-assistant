@@ -105,7 +105,7 @@ onMounted(() => {
 <template>
 	<main class="w-full h-full flex justify-end">
 		<section
-			class="h-screen bg-neutral-900 rounded-[3rem] flex justify-between items-center border border-neutral-800 pr-4 relative overflow-hidden z-10"
+			class="h-screen bg-neutral-900 rounded-[3rem] flex justify-between items-center border border-neutral-600 pr-4 relative overflow-hidden z-10"
 			:class="[
 				'transition-all duration-500 ease-in-out',
 			]" :style="{ width: (isExpanded ? EXPANDED_WIDTH : BASE_WIDTH) + 'px' }" data-tauri-drag-region>
