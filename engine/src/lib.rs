@@ -18,7 +18,7 @@ use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
         setup_audio_device,
-        stt::{WorkerContext, stt_service::STTService},
+        stt::{stt_service::STTService, worker::{WorkerContext, spawn_transcription_worker}},
         tts::TTSService,
     },
     commands::CommandMatcher,
@@ -190,7 +190,7 @@ pub async fn start_engine(
 
     let worker_tx = tx_internal.clone();
 
-    audio::stt::spawn_transcription_worker(
+    spawn_transcription_worker(
         worker_tx,
         rx_internal,
         worker_context,

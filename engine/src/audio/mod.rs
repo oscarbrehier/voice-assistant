@@ -15,6 +15,7 @@ pub mod utils;
 pub enum Packet {
     Pulse(Vec<f32>),
     Speech(Vec<f32>),
+    WakeWordCheck(Vec<f32>),
     Volume(f32),
     Transcription(String),
     State(State)

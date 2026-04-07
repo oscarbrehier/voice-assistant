@@ -54,7 +54,7 @@ pub fn run() {
                 .expect("failed to get resource dir")
                 .join("python");
 
-            let _ = window.hide();
+            // let _ = window.hide();
 
             tauri::async_runtime::spawn(async move {
                 let paths = EnginePaths {
@@ -72,17 +72,17 @@ pub fn run() {
                         loop {
                             match ui_rx.recv().await {
                                 Ok(event) => {
-                                    let state = event.state.clone() as u8;
-                                    let should_be_visible = state > 0;
+                                    // let state = event.state.clone() as u8;
+                                    // let should_be_visible = state > 0;
 
-                                    if should_be_visible != is_visible {
-                                        if should_be_visible {
-                                            let _ = window.show();
-                                        } else {
-                                            let _ = window.hide();
-                                        }
-                                        is_visible = should_be_visible;
-                                    };
+                                    // if should_be_visible != is_visible {
+                                    //     if should_be_visible {
+                                    //         let _ = window.show();
+                                    //     } else {
+                                    //         let _ = window.hide();
+                                    //     }
+                                    //     is_visible = should_be_visible;
+                                    // };
 
                                     let _ = handle.emit("engine-update", &event);
                                 }

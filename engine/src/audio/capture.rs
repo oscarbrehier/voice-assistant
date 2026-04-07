@@ -24,6 +24,46 @@ use crate::{
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
 
+struct CircularBuffer {
+    buffer: Vec<f32>,
+    write_index: usize,
+    full: bool,
+}
+
+impl CircularBuffer {
+    fn new(durations_secs: f32, sample_rate: usize) -> Self {
+        let capacity = (durations_secs * sample_rate as f32) as usize;
+        Self {
+            buffer: vec![0.0; capacity],
+            write_index: 0,
+            full: false,
+        }
+    }
+
+    fn push(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            self.buffer[self.write_index] = sample;
+            self.write_index = (self.write_index + 1) % self.buffer.len();
+
+            if self.write_index == 0 {
+                self.full = true;
+            }
+        }
+    }
+
+    fn get_all(&self) -> Vec<f32> {
+        if !self.full {
+            self.buffer[..self.write_index].to_vec()
+        } else {
+            let mut result = Vec::with_capacity(self.buffer.len());
+
+            result.extend_from_slice(&self.buffer[self.write_index..]);
+            result.extend_from_slice(&self.buffer[..self.write_index]);
+            result
+        }
+    }
+}
+
 pub fn init_audio_capture(
     device: &Device,
     config: SupportedStreamConfig,
@@ -105,6 +145,9 @@ pub fn run_vad_loop(
     let silence_threshold_chunks = 1;
     let mut silence_counter = 0;
 
+    let wake_word_duration_secs = 1.5;
+    let mut circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
+
     let mut last_speech_instant = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(20);
 
@@ -121,6 +164,7 @@ pub fn run_vad_loop(
             queue.clear();
             drop(queue);
             speech_buffer.clear();
+            circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
             continue;
         }
 
@@ -166,6 +210,10 @@ pub fn run_vad_loop(
 
             let mono = to_mono(&full_chunk, channels);
 
+            circular_buffer.push(&mono);
+
+            let current_state = state.load(Ordering::SeqCst);
+
             if has_speech(&mono, 0.015) {
                 last_speech_instant = std::time::Instant::now();
 
@@ -173,8 +221,19 @@ pub fn run_vad_loop(
                     State::broadcast(State::Recording, &state, &tx);
                 }
 
+                println!("current state is: {}", current_state);
+
+                let updated_state = state.load(Ordering::SeqCst);
+
+                if updated_state == State::Recording as u8 && circular_buffer.full {
+                    let wake_word_audio = circular_buffer.get_all();
+                    let _ = tx.send(Packet::WakeWordCheck(wake_word_audio));
+                    circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
+                }
+
                 if speech_buffer.len() + mono.len() > max_speech_samples {
                     if !speech_buffer.is_empty() {
+                        println!("sending speech packet");
                         let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
                     }
 
@@ -184,15 +243,13 @@ pub fn run_vad_loop(
                     speech_buffer.extend(mono);
                     silence_counter = 0;
                 }
-
             } else {
-                if current_state == State::Recording as u8 || current_state == State::Active as u8 {
+                if !speech_buffer.is_empty() {
                     silence_counter += 1;
 
                     if silence_counter >= silence_threshold_chunks {
-                        if !speech_buffer.is_empty() {
-                            let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
-                        }
+                        println!("sending speech packet");
+                        let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
 
                         if current_state == State::Recording as u8 {
                             State::broadcast(State::Idle, &state, &tx);
@@ -202,6 +259,8 @@ pub fn run_vad_loop(
                     } else {
                         speech_buffer.extend(mono);
                     }
+                } else {
+                    silence_counter = 0;
                 }
             }
         }
