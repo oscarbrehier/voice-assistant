@@ -16,24 +16,24 @@ pub mod system;
 pub enum Action {
     PlayMusic,
     #[serde(rename_all = "lowercase")]
-    OpenApp(String),
-    GetTime,
+    OpenApp { app: String },
+    GetTime {},
     Unknown,
 }
 
 impl Action {
-    pub fn execute(&self) -> anyhow::Result<ActionResult> {
+    pub fn execute(&self, template: Option<String>) -> anyhow::Result<ActionResult> {
         match self {
             Action::PlayMusic => {
                 play_pause()?;
                 Ok(ActionResult::Success)
             }
-            Action::OpenApp(app) => {
+            Action::OpenApp { app} => {
                 spawn_app(app.clone())?;
                 Ok(ActionResult::Success)
             }
-            Action::GetTime => {
-                let time = get_time()?;
+            Action::GetTime {} => {
+                let time = get_time(template)?;
                 Ok(ActionResult::Message(time))
             }
             Action::Unknown => Ok(ActionResult::Success),
@@ -47,8 +47,8 @@ pub enum ActionResult {
     Message(String),
 }
 
-pub fn handle_action(action: Action, tts: &TTSService, state: Arc<AtomicU8>, sender: &broadcast::Sender<Packet>) -> anyhow::Result<()> {
-    match action.execute()? {
+pub fn handle_action(action: Action, tts: &TTSService, state: Arc<AtomicU8>, sender: &broadcast::Sender<Packet>, template: Option<String>) -> anyhow::Result<()> {
+    match action.execute(template)? {
         ActionResult::Success => Ok(()),
         ActionResult::Message(msg) => {
             tts.speak(&msg, state, sender)?;

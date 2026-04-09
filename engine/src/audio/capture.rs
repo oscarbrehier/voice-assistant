@@ -221,8 +221,6 @@ pub fn run_vad_loop(
                     State::broadcast(State::Recording, &state, &tx);
                 }
 
-                println!("current state is: {}", current_state);
-
                 let updated_state = state.load(Ordering::SeqCst);
 
                 if updated_state == State::Recording as u8 && circular_buffer.full {
@@ -231,24 +229,24 @@ pub fn run_vad_loop(
                     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
                 }
 
-                if speech_buffer.len() + mono.len() > max_speech_samples {
-                    if !speech_buffer.is_empty() {
-                        println!("sending speech packet");
-                        let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
-                    }
+                if updated_state == State::Active as u8 {
+                    if speech_buffer.len() + mono.len() > max_speech_samples {
+                        if !speech_buffer.is_empty() {
+                            let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
+                        }
 
-                    speech_buffer = mono;
-                    silence_counter = 0;
-                } else {
-                    speech_buffer.extend(mono);
-                    silence_counter = 0;
+                        speech_buffer = mono;
+                        silence_counter = 0;
+                    } else {
+                        speech_buffer.extend(mono);
+                        silence_counter = 0;
+                    }
                 }
             } else {
                 if !speech_buffer.is_empty() {
                     silence_counter += 1;
 
                     if silence_counter >= silence_threshold_chunks {
-                        println!("sending speech packet");
                         let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
 
                         if current_state == State::Recording as u8 {

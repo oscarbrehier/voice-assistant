@@ -3,12 +3,14 @@
     {
       "action": "PlayMusic",
       "description": "Play/Pause the currently playing media",
-      "triggers": ["play music", "play song", "start song", "pause music"]
+      "triggers": ["play music", "play song", "start song", "pause music"],
+      "generate_message": false
     },
     {
       "action": "GetTime",
       "description": "Get the local time",
-      "triggers": ["what time is it", "give me the time"]
+      "triggers": ["what time is it", "give me the time"],
+      "generate_message": false
     }
   ],
   "dynamic_commands": [

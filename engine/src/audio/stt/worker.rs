@@ -7,7 +7,7 @@ use tokio::{sync::broadcast, task::JoinHandle};
 
 use crate::{
     ActiveGuard, State,
-    actions::{Action, handle_action},
+    actions::{Action, ActionResult, handle_action},
     audio::{Packet, stt::stt_service::STTService, tts::TTSService, utils::resample_to_16khz},
     commands::CommandMatcher,
     config::Config,
@@ -58,7 +58,7 @@ async fn process_speech_logic(
 
         if action != Action::Unknown {
             let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
-            let _ = handle_action(action, &ctx.tts, Arc::clone(&state), &tx);
+            let _ = handle_action(action, &ctx.tts, Arc::clone(&state), &tx, None);
         } else {
             let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
 
@@ -70,16 +70,20 @@ async fn process_speech_logic(
                     }))
                     .unwrap_or(Action::Unknown);
 
+                    println!("action: {:?}", action);
+
+                    let mut final_message = response.message.clone();
+
                     if action != Action::Unknown {
-                        let _ = handle_action(action, &ctx.tts, Arc::clone(&state), &tx);
+                        let template = Some(response.message.clone());
+                        if let Ok(ActionResult::Message(msg)) = action.execute(template) {
+                            final_message = msg;
+                        }
                     }
 
-                    if !response.message.is_empty() {
-                        match ctx.tts.speak(&response.message, Arc::clone(&state), &tx) {
-                            Err(e) => {
-                                eprintln!("failed to generate speech: {e}")
-                            }
-                            _ => {}
+                    if !final_message.is_empty() {
+                        if let Err(e) = ctx.tts.speak(&final_message, Arc::clone(&state), &tx) {
+                            eprintln!("failed to generate speech: {e}");
                         }
                     }
                 }
@@ -110,6 +114,14 @@ pub fn spawn_transcription_worker(
             match message {
                 Packet::Speech(data) => {
                     if let Some(transcription) = get_transcription(&mut ctx, &data).await {
+                        if state.load(Ordering::SeqCst) == State::Recording as u8 {
+                            let has_wake_word = transcription.contains(&ctx.config.name);
+                            if !has_wake_word {
+                                State::broadcast(State::Idle, &state, &tx);
+                                return;
+                            }
+                            State::broadcast(State::Active, &state, &tx);
+                        }
                         process_speech_logic(
                             transcription,
                             &mut ctx,
@@ -128,8 +140,6 @@ pub fn spawn_transcription_worker(
 
                         if has_wake_word {
                             State::broadcast(State::Active, &state, &tx);
-                        } else {
-                            State::broadcast(State::Idle, &state, &tx);
                         }
                     }
                 }

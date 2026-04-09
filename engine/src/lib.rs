@@ -105,7 +105,7 @@ pub async fn start_engine(
     let env_file = paths.config_dir.join(".env");
     let config_file = paths.config_dir.join("config.json");
     let commands_file = paths.config_dir.join("commands.json");
-    let prompt_path = paths.config_dir.join("system_prompt.txt");
+    let prompt_path = paths.config_dir.join("system_prompt.md");
 
     if let Err(e) = dotenvy::from_path(&env_file) {
         eprintln!("Failed to load .env from {:?}: {}", env_file, e)
