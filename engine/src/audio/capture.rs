@@ -6,6 +6,7 @@ use std::{
         mpsc,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use cpal::{
@@ -18,7 +19,7 @@ use crate::{
     State,
     audio::{
         Packet,
-        utils::{has_speech, to_mono},
+        utils::{BiquadFilter, has_speech, to_mono},
     },
 };
 
@@ -61,6 +62,60 @@ impl CircularBuffer {
             result.extend_from_slice(&self.buffer[..self.write_index]);
             result
         }
+    }
+}
+
+pub struct TransientTracker {
+    last_impact_time: Instant,
+    impact_count: u32,
+    volume_threshold: f32,
+    ratio_threshold: f32,
+    min_gap: Duration,
+    max_gap: Duration,
+}
+
+impl TransientTracker {
+    pub fn new(volume_threshold: f32, ratio_threshold: f32) -> Self {
+        TransientTracker {
+            last_impact_time: Instant::now(),
+            impact_count: 0,
+            volume_threshold,
+            ratio_threshold,
+            min_gap: Duration::from_millis(100),
+            max_gap: Duration::from_millis(500),
+        }
+    }
+
+    pub fn process(&mut self, peak_amplitude: f32, transient_ratio: f32) -> bool {
+        if peak_amplitude < self.volume_threshold {
+            return false;
+        }
+
+        if transient_ratio < self.ratio_threshold {
+            return false;
+        }
+
+        let now = Instant::now();
+        let gap = now.duration_since(self.last_impact_time);
+
+        if self.impact_count == 0 {
+            self.impact_count = 1;
+            self.last_impact_time = now;
+            return false;
+        }
+
+        if gap < self.min_gap {
+            return false;
+        }
+
+        if gap >= self.max_gap {
+            self.impact_count = 0;
+            self.last_impact_time = now;
+            return false;
+        }
+
+        self.impact_count = 0;
+        true
     }
 }
 
@@ -154,6 +209,10 @@ pub fn run_vad_loop(
     let max_speech_duration_secs = 30;
     let max_speech_samples = channels * sample_rate * max_speech_duration_secs;
 
+    let mut transient_tracker = TransientTracker::new(0.4, 5.0);
+
+    let mut bandpass = BiquadFilter::new_bandpass(2500.0, sample_rate as f32, 1.7);
+
     while running.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(10));
 
@@ -174,6 +233,24 @@ pub fn run_vad_loop(
             let pulse_samples: Vec<f32> =
                 queue.iter().rev().take(pulse_chunk_size).copied().collect();
             let pulse_mono = to_mono(&pulse_samples, channels);
+
+            let filtered_samples: Vec<f32> =
+                pulse_mono.iter().map(|&s| bandpass.process(s)).collect();
+
+            let (peak, sum) =
+                filtered_samples
+                    .iter()
+                    .fold((0.0_f32, 0.0_f32), |(max, current_sum), &sample| {
+                        let abs_val = sample.abs();
+                        (max.max(abs_val), current_sum + abs_val)
+                    });
+
+            let average = sum / filtered_samples.len() as f32;
+            let transient_ratio = if average > 0.0 { peak / average } else { 0.0 };
+
+            if transient_tracker.process(peak, transient_ratio) {
+                println!("clap detected: peak {}", peak);
+            }
 
             let _ = tx.send(Packet::Pulse(pulse_mono));
         }
