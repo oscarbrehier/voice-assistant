@@ -249,7 +249,11 @@ pub fn run_vad_loop(
             let transient_ratio = if average > 0.0 { peak / average } else { 0.0 };
 
             if transient_tracker.process(peak, transient_ratio) {
-                println!("clap detected: peak {}", peak);
+                println!("clap detected: peak {} state {}", peak, current_state);
+                if current_state == State::Idle as u8 || current_state == State::Recording as u8 {
+                    println!("clap detected, state changed");
+                    State::broadcast(State::Active, &state, &tx);
+                }
             }
 
             let _ = tx.send(Packet::Pulse(pulse_mono));
