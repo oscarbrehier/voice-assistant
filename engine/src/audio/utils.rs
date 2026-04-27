@@ -1,5 +1,3 @@
-use std::f32::consts::PI;
-
 pub fn resample_to_16khz(audio: &[f32], from_rate: usize) -> Vec<f32> {
     if from_rate == 16000 {
         return audio.to_vec();
@@ -22,6 +20,18 @@ pub fn resample_to_16khz(audio: &[f32], from_rate: usize) -> Vec<f32> {
     }
 
     output
+}
+
+pub fn f32_to_i16_pcm(samples: &[f32]) -> Vec<u8> {
+    samples.iter()
+        .map(|&sample| {
+            let clamped = sample.clamp(-1.0, 1.0);
+
+            let scaled = (clamped * i16::MAX as f32) as i16;
+            scaled.to_le_bytes()
+        })
+        .flatten()
+        .collect()
 }
 
 pub fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
