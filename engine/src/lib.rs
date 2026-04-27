@@ -31,6 +31,7 @@ mod audio;
 mod commands;
 mod config;
 mod llm;
+mod memory;
 
 pub use audio::Packet;
 
