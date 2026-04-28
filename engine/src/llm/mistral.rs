@@ -1,7 +1,6 @@
 use reqwest::Client;
 use serde_json::Value;
 
-
 use crate::llm::{LLMResponse, history::ConversationHistory};
 
 pub async fn call_mistral_with_history(
@@ -18,9 +17,32 @@ pub async fn call_mistral_with_history(
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", mistral_api_key))
         .json(&serde_json::json!({
-            "model": "ministral-8b-latest",
-            "messages": messages,
-            "response_format": { "type": "json_object" },
+                "model": "ministral-8b-latest",
+                "messages": messages,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "jarvis_response",
+                        "strict": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "action": { "type": ["string", "null"] },
+                                "params": { "type": "object" },
+                                "message": { "type": "string" },
+                                "save_to_memory": {
+                                    "type": ["object", "null"],
+                                    "properties": {
+                                        "key": { "type": "string" },
+                                        "value": { "type": "string" }
+                                    },
+                                    "required": ["key", "value"]
+                                }
+                            },
+                            "required": ["action", "params", "message", "save_to_memory"]
+                        }
+                    }
+                }
         }))
         .send()
         .await?;
