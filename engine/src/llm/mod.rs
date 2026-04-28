@@ -25,13 +25,14 @@ pub struct LLMResponse {
 
 pub struct LLMEngine {
 	last_updated: u64,
-	history: ConversationHistory
+	history: ConversationHistory,
+	system_prompt_template: String,
 }
 
 impl LLMEngine {
 	pub fn new<P: AsRef<Path>>(prompt_path: P, config: &Config, commands: &CommandConfig) -> Self {
 
-		let system_prompt = generate_system_prompt(prompt_path, config, commands)
+		let system_prompt_template = generate_system_prompt(prompt_path, config, commands)
 			.expect("Failed to generate system prompt");
 
 		let last_updated = SystemTime::now()
@@ -39,17 +40,18 @@ impl LLMEngine {
 			.unwrap()
 			.as_secs();
 
-		let history = ConversationHistory::new(&system_prompt);
+		let history = ConversationHistory::new();
 
 		Self {
 			last_updated,
-			history
+			history,
+			system_prompt_template
 		}
 
 	}
 
-	#[instrument(skip(self, text), fields(input = %text))]
-	pub async fn generate(&mut self, text: &str) -> anyhow::Result<LLMResponse> {
+	#[instrument(skip(self, text, relevant_memories), fields(input = %text))]
+	pub async fn generate(&mut self, text: &str, relevant_memories: Vec<String>) -> anyhow::Result<LLMResponse> {
 
 		self.history.add_user_input(text);
 		
@@ -57,7 +59,7 @@ impl LLMEngine {
 			println!("{} - {}\n\n", message.role, message.content);
 		}
 
-		let (response, raw_json) = call_mistral_with_history(&mut self.history).await?;
+		let (response, raw_json) = call_mistral_with_history(&self.system_prompt_template, &mut self.history, relevant_memories).await?;
 
 		self.history.add_assistant_response(&raw_json);
 

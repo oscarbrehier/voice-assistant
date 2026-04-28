@@ -4,12 +4,26 @@ use serde_json::Value;
 use crate::llm::{LLMResponse, history::ConversationHistory};
 
 pub async fn call_mistral_with_history(
+    system_template: &str,
     history: &mut ConversationHistory,
+    relevant_memories: Vec<String>,
 ) -> anyhow::Result<(LLMResponse, String)> {
     let mistral_api_key: String =
         std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY key not found");
 
-    let messages = history.build_history_string();
+    let memory_block = if relevant_memories.is_empty() {
+        "No specific memories recalled for this request.".to_string()
+    } else {
+        relevant_memories.join("\n")
+    };
+
+    let system_content = system_template.replace("{{retrieved_memories}}", &memory_block);
+
+    println!("SYSTEM_PROMPT: {}", system_content);
+
+    let mut messages = vec![serde_json::json!({ "role": "system", "content": system_content })];
+
+    messages.extend(history.build_history_string());
 
     let client = Client::new();
     let response = client

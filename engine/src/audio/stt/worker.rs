@@ -11,7 +11,8 @@ use crate::{
     audio::{Packet, stt::stt_service::STTService, tts::TTSService, utils::resample_to_16khz},
     commands::CommandMatcher,
     config::Config,
-    llm::LLMEngine, memory::MemoryManager,
+    llm::LLMEngine,
+    memory::MemoryManager,
 };
 
 pub struct WorkerContext {
@@ -21,7 +22,7 @@ pub struct WorkerContext {
     pub llm_engine: LLMEngine,
     pub config: Config,
     pub sample_rate: usize,
-    pub memory: Arc<std::sync::Mutex<MemoryManager>>
+    pub memory: Arc<tokio::sync::Mutex<MemoryManager>>,
 }
 
 async fn get_transcription(ctx: &mut WorkerContext, data: &[f32]) -> Option<String> {
@@ -44,7 +45,7 @@ async fn process_speech_logic(
     ctx: &mut WorkerContext,
     tx: &broadcast::Sender<Packet>,
     state: &Arc<AtomicU8>,
-    assistant_active: &Arc<AtomicBool>
+    assistant_active: &Arc<AtomicBool>,
 ) {
     println!("TRANSCRIPTION: {}", trimmed);
 
@@ -63,7 +64,12 @@ async fn process_speech_logic(
         } else {
             let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
 
-            match ctx.llm_engine.generate(&trimmed).await {
+            let relevant_memories = {
+                let lock = ctx.memory.lock().await;
+                lock.get_relevant_memories(&trimmed).unwrap_or_default()
+            };
+
+            match ctx.llm_engine.generate(&trimmed, relevant_memories).await {
                 Ok(response) => {
                     let action: Action = serde_json::from_value(serde_json::json!({
                         "action": response.action,
@@ -89,10 +95,9 @@ async fn process_speech_logic(
                     }
 
                     if let Some(new_memory) = response.save_to_memory {
-                        if let Ok(lock) = ctx.memory.lock() {
-                            if let Err(e) = lock.save(&new_memory.key, &new_memory.value) {
-                                eprintln!("Failed to save to memory: {e}");
-                            }
+                        let lock = ctx.memory.lock().await;
+                        if let Err(e) = lock.save(&new_memory.key, &new_memory.value) {
+                            eprintln!("Save error: {e}");
                         }
                     }
                 }

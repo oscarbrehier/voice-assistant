@@ -180,7 +180,7 @@ pub async fn start_engine(
     let assistant_active_worker = assistant_active.clone();
 
     let stt_state = state.clone();
-    let worker_memory = Arc::new(Mutex::new(memory));
+    let worker_memory = Arc::new(tokio::sync::Mutex::new(memory));
 
     let worker_context = WorkerContext {
         stt,

@@ -35,3 +35,8 @@ Use `save_to_memory` **ONLY** for persistent facts the user expects you to recal
 
 - Return ONLY the structured JSON matching the provided schema.
 - Do not include prose or explanations outside the JSON.
+
+# Internal Memory Context
+
+The following facts are retrieved from storage and are relevant to the current conversation:
+{{retrieved_memories}}
