@@ -14,35 +14,28 @@ impl MemoryManager {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-        conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(key, value)",
-            [],
+        conn.execute_batch(
+            "
+                CREATE TABLE IF NOT EXISTS memories (
+                    key TEXT PRIMARY KEY, 
+                    value TEXT
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    key, value, content='memories'
+                );
+            ",
         )?;
-
+        
         Ok(Self { conn })
     }
 
     pub fn save(&self, key: &str, value: &str) -> anyhow::Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO memories_fts (key, value) VALUES (?1, ?2)",
+            "INSERT OR REPLACE INTO memories (key, value) VALUES (?1, ?2)",
             params![key, value],
         )?;
 
         Ok(())
-    }
-
-    pub fn get_all_memories(&self) -> anyhow::Result<Vec<(String, String)>> {
-        let mut stmt = self.conn.prepare("SELECT key, value FROM memories_fts")?;
-
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-
-        let mut results = Vec::new();
-
-        for item in rows {
-            results.push(item?);
-        }
-
-        Ok(results)
     }
 
     pub fn get_relevant_memories(&self, user_input: &str) -> anyhow::Result<Vec<String>> {
@@ -68,12 +61,13 @@ impl MemoryManager {
                 LIMIT 10",
         )?;
 
-        let relevant = stmt.query_map([clean_query], |row| {
-            let key: String = row.get(0)?;
-            let value: String = row.get(1)?;
-            Ok(format!("{}: {}", key, value))
-        })?
-        .collect::<Result<Vec<String>, rusqlite::Error>>()?;
+        let relevant = stmt
+            .query_map([clean_query], |row| {
+                let key: String = row.get(0)?;
+                let value: String = row.get(1)?;
+                Ok(format!("{}: {}", key, value))
+            })?
+            .collect::<Result<Vec<String>, rusqlite::Error>>()?;
 
         Ok(relevant)
     }

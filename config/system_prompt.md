@@ -31,6 +31,12 @@ Use `save_to_memory` **ONLY** for persistent facts the user expects you to recal
 - **Exclusion:** Do NOT save general chat history or your own responses.
 - **Naming:** Use concise snake_case for keys (e.g., `favorite_food`, `coding_language`).
 
+### Memory Rules
+1. ONLY use `save_to_memory` field if the user has provided NEW, SPECIFIC, and VERIFIABLE information.
+2. DO NOT save "unknown", "null", "none", or placeholder values.
+3. If you do not know a piece of information, simple leave `save_to_memory` as null.
+4. If the user corrects a previous memory, use the SAME key to overwrite the old information.
+
 # Output Constraints
 
 - Return ONLY the structured JSON matching the provided schema.
