@@ -9,11 +9,18 @@ pub mod history;
 pub mod mistral;
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct MemoryEntry {
+	pub key: String,
+	pub value: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LLMResponse {
 	pub(crate) action: Option<String>,
 	pub(crate) message: String,
 	#[serde(default)]
-	pub(crate) params: Option<HashMap<String, String>>
+	pub(crate) params: Option<HashMap<String, String>>,
+	pub(crate) save_to_memory: Option<MemoryEntry>
 }
 
 pub struct LLMEngine {

@@ -14,3 +14,5 @@
 *.stackdump
 
 TODO.md
+
+*.db

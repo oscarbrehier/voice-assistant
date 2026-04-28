@@ -1,8 +1,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}
     },
     time::Duration,
 };
@@ -23,7 +22,7 @@ use crate::{
     },
     commands::CommandMatcher,
     config::Config,
-    llm::LLMEngine,
+    llm::LLMEngine, memory::MemoryManager,
 };
 
 mod actions;
@@ -136,6 +135,8 @@ pub async fn start_engine(
 
     let state = Arc::new(AtomicU8::new(State::Idle as u8));
 
+    let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
+
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
 
@@ -179,6 +180,7 @@ pub async fn start_engine(
     let assistant_active_worker = assistant_active.clone();
 
     let stt_state = state.clone();
+    let worker_memory = Arc::new(Mutex::new(memory));
 
     let worker_context = WorkerContext {
         stt,
@@ -187,6 +189,7 @@ pub async fn start_engine(
         llm_engine,
         sample_rate,
         config,
+        memory: worker_memory
     };
 
     let worker_tx = tx_internal.clone();

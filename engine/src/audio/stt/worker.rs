@@ -11,7 +11,7 @@ use crate::{
     audio::{Packet, stt::stt_service::STTService, tts::TTSService, utils::resample_to_16khz},
     commands::CommandMatcher,
     config::Config,
-    llm::LLMEngine,
+    llm::LLMEngine, memory::MemoryManager,
 };
 
 pub struct WorkerContext {
@@ -21,6 +21,7 @@ pub struct WorkerContext {
     pub llm_engine: LLMEngine,
     pub config: Config,
     pub sample_rate: usize,
+    pub memory: Arc<std::sync::Mutex<MemoryManager>>
 }
 
 async fn get_transcription(ctx: &mut WorkerContext, data: &[f32]) -> Option<String> {
@@ -43,7 +44,7 @@ async fn process_speech_logic(
     ctx: &mut WorkerContext,
     tx: &broadcast::Sender<Packet>,
     state: &Arc<AtomicU8>,
-    assistant_active: &Arc<AtomicBool>,
+    assistant_active: &Arc<AtomicBool>
 ) {
     println!("TRANSCRIPTION: {}", trimmed);
 
@@ -86,6 +87,14 @@ async fn process_speech_logic(
                             eprintln!("failed to generate speech: {e}");
                         }
                     }
+
+                    if let Some(new_memory) = response.save_to_memory {
+                        if let Ok(lock) = ctx.memory.lock() {
+                            if let Err(e) = lock.save(&new_memory.key, &new_memory.value) {
+                                eprintln!("Failed to save to memory: {e}");
+                            }
+                        }
+                    }
                 }
                 Err(e) => eprintln!("Failed to generate: {e}"),
             }
@@ -118,7 +127,7 @@ pub fn spawn_transcription_worker(
                             let has_wake_word = transcription.contains(&ctx.config.name);
                             if !has_wake_word {
                                 State::broadcast(State::Idle, &state, &tx);
-                                return;
+                                continue;
                             }
                             State::broadcast(State::Active, &state, &tx);
                         }
