@@ -12,7 +12,7 @@ use crate::{
     commands::CommandMatcher,
     config::Config,
     llm::LLMEngine,
-    memory::MemoryManager,
+    memory::{MemoryManager, MemoryType},
 };
 
 pub struct WorkerContext {
@@ -64,12 +64,23 @@ async fn process_speech_logic(
         } else {
             let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
 
-            let relevant_memories = {
-                let lock = ctx.memory.lock().await;
-                lock.get_relevant_memories(&trimmed).unwrap_or_default()
+            let (core_identity, relevant_memories) = {
+
+                let memory_guard = ctx.memory.lock().await;
+
+                let core = if ctx.llm_engine.needs_identity_refresh {
+                    memory_guard.get_core_identity().unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
+                let relevant = memory_guard.get_relevant_memories(&trimmed).unwrap_or_default();
+
+                (core, relevant)
+
             };
 
-            match ctx.llm_engine.generate(&trimmed, relevant_memories).await {
+            match ctx.llm_engine.generate(&trimmed, core_identity, relevant_memories).await {
                 Ok(response) => {
                     let action: Action = serde_json::from_value(serde_json::json!({
                         "action": response.action,
@@ -96,7 +107,14 @@ async fn process_speech_logic(
 
                     if let Some(new_memory) = response.save_to_memory {
                         let lock = ctx.memory.lock().await;
-                        if let Err(e) = lock.save(&new_memory.key, &new_memory.value) {
+
+                        let memory_type = new_memory.memory_type;
+
+                        if let MemoryType::Identity = memory_type {
+                            ctx.llm_engine.mark_identity_dirty();
+                        }
+
+                        if let Err(e) = lock.save(&new_memory.key, &new_memory.value, memory_type) {
                             eprintln!("Save error: {e}");
                         }
                     }

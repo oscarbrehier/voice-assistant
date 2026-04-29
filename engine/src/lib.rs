@@ -131,11 +131,12 @@ pub async fn start_engine(
 
     let command_matcher = CommandMatcher::from_file(commands_file)?;
 
-    let llm_engine = LLMEngine::new(prompt_path, &config, &command_matcher.config);
-
+    
     let state = Arc::new(AtomicU8::new(State::Idle as u8));
-
+    
     let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
+
+    let llm_engine = LLMEngine::new(prompt_path, &config, &command_matcher.config, &memory)?;
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");

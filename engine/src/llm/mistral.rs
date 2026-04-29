@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::llm::{LLMResponse, history::ConversationHistory};
 
 pub async fn call_mistral_with_history(
-    system_template: &str,
+    system_prompt: String,
     history: &mut ConversationHistory,
     relevant_memories: Vec<String>,
 ) -> anyhow::Result<(LLMResponse, String)> {
@@ -17,11 +17,7 @@ pub async fn call_mistral_with_history(
         relevant_memories.join("\n")
     };
 
-    let system_content = system_template.replace("{{retrieved_memories}}", &memory_block);
-
-    println!("SYSTEM_PROMPT: {}", system_content);
-
-    let mut messages = vec![serde_json::json!({ "role": "system", "content": system_content })];
+    let mut messages = vec![serde_json::json!({ "role": "system", "content": system_prompt })];
 
     messages.extend(history.build_history_string());
 
@@ -48,9 +44,10 @@ pub async fn call_mistral_with_history(
                                     "type": ["object", "null"],
                                     "properties": {
                                         "key": { "type": "string" },
-                                        "value": { "type": "string" }
+                                        "value": { "type": "string" },
+                                        "type": { "type": "string", "enum": ["Identity", "Situational"] }
                                     },
-                                    "required": ["key", "value"]
+                                    "required": ["key", "value", "type"]
                                 }
                             },
                             "required": ["action", "params", "message", "save_to_memory"]
