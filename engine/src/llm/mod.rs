@@ -63,8 +63,10 @@ impl LLMEngine {
 
         let core_identity_cache = memory.get_core_identity()?.join("\n");
 
+		println!("CORE IDENTITY CACHE (NEW): {}", core_identity_cache);
+		
         Ok(Self {
-            last_updated,
+			last_updated,
             history,
             system_prompt_template,
             core_identity_cache,
@@ -79,11 +81,13 @@ impl LLMEngine {
         core_identity: Vec<String>,
 		relevant_memories: Vec<String>
     ) -> anyhow::Result<LLMResponse> {
-        if core_identity.is_empty() {
+        if !core_identity.is_empty() {
             self.core_identity_cache = core_identity.join("\n");
 			self.needs_identity_refresh = false;
         }
 
+		println!("CORE IDENTITY CACHE (GENERATE): {}", self.core_identity_cache);
+		
         let situational_str = if relevant_memories.is_empty() {
             "No specific situational memories found for this query.".to_string()
         } else {
@@ -94,6 +98,8 @@ impl LLMEngine {
             .system_prompt_template
             .replace("{{core_identity}}", &self.core_identity_cache)
             .replace("{{retrieved_memories}}", &situational_str);
+
+		println!("{final_system_prompt}");
 
         self.history.add_user_input(text);
 

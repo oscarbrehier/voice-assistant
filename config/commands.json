@@ -11,6 +11,11 @@
       "description": "Get the local time",
       "triggers": ["what time is it", "give me the time"],
       "generate_message": false
+    },
+    {
+      "action": "GetSystemStats",
+      "description": "Retrieve real-time system vitals: CPU usage/temp, RAM usage, and Disk health",
+      "generate_message": false
     }
   ],
   "dynamic_commands": [
