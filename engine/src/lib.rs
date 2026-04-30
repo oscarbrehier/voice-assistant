@@ -1,7 +1,8 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}
+        Arc, RwLock,
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -11,26 +12,33 @@ use cpal::Stream;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::Serialize;
-use tokio::{sync::broadcast};
+use tokio::sync::broadcast;
 
 use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
         setup_audio_device,
-        stt::{stt_service::STTService, worker::{WorkerContext, spawn_transcription_worker}},
+        stt::{
+            stt_service::STTService,
+            worker::{WorkerContext, spawn_transcription_worker},
+        },
         tts::TTSService,
     },
     commands::CommandMatcher,
     config::Config,
-    llm::LLMEngine, memory::MemoryManager,
+    llm::LLMEngine,
+    memory::MemoryManager,
+    state::{GlobalContext, SharedContext, Vitals},
 };
 
-mod actions;
+pub mod actions;
 mod audio;
 mod commands;
 mod config;
 mod llm;
 mod memory;
+pub mod monitor;
+pub mod state;
 
 pub use audio::Packet;
 
@@ -53,11 +61,7 @@ pub enum State {
 }
 
 impl State {
-    fn broadcast(
-        new_state: State,
-        atomic_state: &Arc<AtomicU8>,
-        tx: &broadcast::Sender<Packet>,
-    ) {
+    fn broadcast(new_state: State, atomic_state: &Arc<AtomicU8>, tx: &broadcast::Sender<Packet>) {
         atomic_state.store(new_state.clone() as u8, Ordering::SeqCst);
         let _ = tx.send(Packet::State(new_state));
     }
@@ -66,13 +70,21 @@ impl State {
 struct ActiveGuard {
     assistant: Arc<AtomicBool>,
     state: Arc<AtomicU8>,
-    tx: broadcast::Sender<Packet>
+    tx: broadcast::Sender<Packet>,
 }
 
 impl ActiveGuard {
-    fn new(assistant: Arc<AtomicBool>, state: Arc<AtomicU8>, tx: broadcast::Sender<Packet>) -> Self {
+    fn new(
+        assistant: Arc<AtomicBool>,
+        state: Arc<AtomicU8>,
+        tx: broadcast::Sender<Packet>,
+    ) -> Self {
         assistant.store(true, Ordering::SeqCst);
-        Self { assistant, state, tx }
+        Self {
+            assistant,
+            state,
+            tx,
+        }
     }
 }
 
@@ -131,9 +143,17 @@ pub async fn start_engine(
 
     let command_matcher = CommandMatcher::from_file(commands_file)?;
 
-    
+    let shared_context: SharedContext = Arc::new(GlobalContext {
+        telemetry: Arc::new(RwLock::new(Vitals::default())),
+    });
+
+    let monitor_state = Arc::clone(&shared_context);
+    tokio::spawn(async move {
+        monitor::run_monitoring_loop(monitor_state).await;
+    });
+
     let state = Arc::new(AtomicU8::new(State::Idle as u8));
-    
+
     let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
 
     let llm_engine = LLMEngine::new(prompt_path, &config, &command_matcher.config, &memory)?;
@@ -152,7 +172,7 @@ pub async fn start_engine(
     tokio::spawn(async move {
         loop {
             if !bridge_running.load(Ordering::SeqCst) {
-                break ;
+                break;
             }
 
             match bridge_rx_int.recv().await {
@@ -190,7 +210,8 @@ pub async fn start_engine(
         llm_engine,
         sample_rate,
         config,
-        memory: worker_memory
+        memory: worker_memory,
+        global_ctx: shared_context.clone()
     };
 
     let worker_tx = tx_internal.clone();

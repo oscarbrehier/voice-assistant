@@ -13,7 +13,7 @@ use crate::{
     commands::CommandConfig,
     config::Config,
     llm::{history::ConversationHistory, mistral::call_mistral_with_history},
-    memory::{MemoryManager, MemoryType},
+    memory::{MemoryManager, MemoryType}, state::SharedContext,
 };
 
 pub mod history;
@@ -74,10 +74,11 @@ impl LLMEngine {
         })
     }
 
-    #[instrument(skip(self, text, core_identity, relevant_memories), fields(input = %text))]
+    #[instrument(skip(self, text, global_ctx, core_identity, relevant_memories), fields(input = %text))]
     pub async fn generate(
         &mut self,
         text: &str,
+        global_ctx: &SharedContext,
         core_identity: Vec<String>,
 		relevant_memories: Vec<String>
     ) -> anyhow::Result<LLMResponse> {
@@ -94,8 +95,11 @@ impl LLMEngine {
             relevant_memories.join("\n")
         };
 
+        let vitals_str = global_ctx.get_vitals_snapshot();
+
         let final_system_prompt = self
             .system_prompt_template
+            .replace("{{vitals}}", &vitals_str)
             .replace("{{core_identity}}", &self.core_identity_cache)
             .replace("{{retrieved_memories}}", &situational_str);
 

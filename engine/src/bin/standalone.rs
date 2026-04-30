@@ -1,6 +1,13 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
-use engine::{EnginePaths, start_engine};
+use engine::{
+    EnginePaths,
+    monitor, start_engine,
+    state::{GlobalContext, SharedContext, Vitals},
+};
 use tokio::signal;
 
 #[tokio::main]
@@ -35,6 +42,20 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("failed to start engine: {:?}", e);
         }
     }
+
+    // let shared_state: SharedContext = Arc::new(GlobalContext {
+    //     telemetry: Arc::new(RwLock::new(Vitals::default())),
+    // });
+
+    // let monitor_state = Arc::clone(&shared_state);
+    // tokio::spawn(async move {
+    //     monitor::run_monitoring_loop(monitor_state).await;
+    // });
+
+    // signal::ctrl_c().await?;
+    // println!("\nShutting down...");
+
+    // get_system_stats()?;
 
     Ok(())
 }

@@ -15,7 +15,8 @@
     {
       "action": "GetSystemStats",
       "description": "Retrieve real-time system vitals: CPU usage/temp, RAM usage, and Disk health",
-      "generate_message": false
+      "triggers": ["vitals", "status", "how are we doing"],
+      "generate_message": true
     }
   ],
   "dynamic_commands": [

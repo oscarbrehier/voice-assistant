@@ -12,7 +12,7 @@ use crate::{
     commands::CommandMatcher,
     config::Config,
     llm::LLMEngine,
-    memory::{MemoryManager, MemoryType},
+    memory::{MemoryManager, MemoryType}, state::SharedContext,
 };
 
 pub struct WorkerContext {
@@ -23,6 +23,7 @@ pub struct WorkerContext {
     pub config: Config,
     pub sample_rate: usize,
     pub memory: Arc<tokio::sync::Mutex<MemoryManager>>,
+    pub global_ctx: SharedContext
 }
 
 async fn get_transcription(ctx: &mut WorkerContext, data: &[f32]) -> Option<String> {
@@ -80,7 +81,7 @@ async fn process_speech_logic(
 
             };
 
-            match ctx.llm_engine.generate(&trimmed, core_identity, relevant_memories).await {
+            match ctx.llm_engine.generate(&trimmed, &ctx.global_ctx, core_identity, relevant_memories).await {
                 Ok(response) => {
                     let action: Action = serde_json::from_value(serde_json::json!({
                         "action": response.action,

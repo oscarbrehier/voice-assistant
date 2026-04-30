@@ -33,3 +33,5 @@ num-derive = "0.4.2"
 num-traits = "0.2.19"
 tokio-tungstenite = "0.29.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
+sysinfo = "0.38.4"
+all-smi = "0.20.1"
