@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, atomic::AtomicU8};
 
 use serde::Serialize;
 
@@ -12,7 +12,9 @@ pub struct Vitals {
 }
 
 pub struct GlobalContext {
-    pub telemetry: Arc<RwLock<Vitals>>
+    pub telemetry: Arc<RwLock<Vitals>>,
+    pub audio_player: Arc<RwLock<Option<rodio::Player>>>,
+    pub engine_state: Arc<AtomicU8>
 }
 
 impl GlobalContext {

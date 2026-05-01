@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 use crate::{
     Packet,
     actions::{datetime::get_time, media::{next_track, play_pause, previous_track}, system::spawn_app},
-    audio::tts::TTSService,
+    audio::tts::TTSService, state::SharedContext,
 };
 
 pub mod datetime;
@@ -66,14 +66,14 @@ pub enum ActionResult {
 pub fn handle_action(
     action: Action,
     tts: &TTSService,
-    state: Arc<AtomicU8>,
+    ctx: SharedContext,
     sender: &broadcast::Sender<Packet>,
     template: Option<String>,
 ) -> anyhow::Result<()> {
     match action.execute(template)? {
         ActionResult::Success => Ok(()),
         ActionResult::Message(msg) => {
-            tts.speak(&msg, state, sender)?;
+            tts.speak(&msg, ctx, sender)?;
             Ok(())
         }
     }

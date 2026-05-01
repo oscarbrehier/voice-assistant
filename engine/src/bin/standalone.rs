@@ -5,6 +5,10 @@ use std::{
 
 use engine::{
     EnginePaths,
+    actions::obsidian::{
+        VaultConfig, append_to_note, create_note, get_recent_notes, list_vault_index,
+        read_note_content, search_notes, smart_append_to_section,
+    },
     monitor, start_engine,
     state::{GlobalContext, SharedContext, Vitals},
 };

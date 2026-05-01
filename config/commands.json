@@ -7,6 +7,18 @@
       "generate_message": false
     },
     {
+      "action": "NextTrack",
+      "description": "Skip to next track",
+      "triggers": ["play next track", "skip the current song"],
+      "generate_message": false
+    },
+    {
+      "action": "PreviousTrack",
+      "description": "Go back to the previous track",
+      "triggers": ["play the previous track"],
+      "generate_message": false
+    },
+    {
       "action": "GetTime",
       "description": "Get the local time",
       "triggers": ["what time is it", "give me the time"],

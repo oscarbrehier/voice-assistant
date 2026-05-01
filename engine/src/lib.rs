@@ -138,21 +138,21 @@ pub async fn start_engine(
     let sample_rate = stream_config.sample_rate() as usize;
     let channels = stream_config.channels() as usize;
 
+    let shared_context: SharedContext = Arc::new(GlobalContext {
+        telemetry: Arc::new(RwLock::new(Vitals::default())),
+        audio_player: Arc::new(RwLock::new(None)),
+        engine_state: Arc::new(AtomicU8::new(State::Idle as u8))
+    });
+
     let stt = STTService::new(paths.script_dir.clone()).await?;
     let tts = TTSService::new(paths.script_dir);
 
     let command_matcher = CommandMatcher::from_file(commands_file)?;
 
-    let shared_context: SharedContext = Arc::new(GlobalContext {
-        telemetry: Arc::new(RwLock::new(Vitals::default())),
-    });
-
     let monitor_state = Arc::clone(&shared_context);
     tokio::spawn(async move {
         monitor::run_monitoring_loop(monitor_state).await;
     });
-
-    let state = Arc::new(AtomicU8::new(State::Idle as u8));
 
     let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
 
@@ -164,7 +164,7 @@ pub async fn start_engine(
     let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
     let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
 
-    let bridge_state = state.clone();
+    let bridge_state = shared_context.engine_state.clone();
     let bridge_tx_ext = tx_external.clone();
     let mut bridge_rx_int = tx_internal.subscribe();
     let bridge_running = running.clone();
@@ -200,7 +200,7 @@ pub async fn start_engine(
 
     let assistant_active_worker = assistant_active.clone();
 
-    let stt_state = state.clone();
+    let stt_state = shared_context.engine_state.clone();
     let worker_memory = Arc::new(tokio::sync::Mutex::new(memory));
 
     let worker_context = WorkerContext {
@@ -225,8 +225,10 @@ pub async fn start_engine(
     );
 
     let engine_tx = tx_internal.clone();
-    let vad_state = state.clone();
+    let vad_state = shared_context.engine_state.clone();
 
+    let vad_context = shared_context.clone();
+    
     tokio::task::spawn_blocking(move || {
         run_vad_loop(
             running,
@@ -236,6 +238,7 @@ pub async fn start_engine(
             channels,
             assistant_active,
             vad_state,
+            vad_context
         );
     });
 

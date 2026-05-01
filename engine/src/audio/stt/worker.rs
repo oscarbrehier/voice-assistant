@@ -61,7 +61,7 @@ async fn process_speech_logic(
 
         if action != Action::Unknown {
             let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
-            let _ = handle_action(action, &ctx.tts, Arc::clone(&state), &tx, None);
+            let _ = handle_action(action, &ctx.tts, ctx.global_ctx.clone(), &tx, None);
         } else {
             let _guard = ActiveGuard::new(assistant_active.clone(), Arc::clone(&state), tx.clone());
 
@@ -101,7 +101,7 @@ async fn process_speech_logic(
                     }
 
                     if !final_message.is_empty() {
-                        if let Err(e) = ctx.tts.speak(&final_message, Arc::clone(&state), &tx) {
+                        if let Err(e) = ctx.tts.speak(&final_message, ctx.global_ctx.clone(), &tx) {
                             eprintln!("failed to generate speech: {e}");
                         }
                     }

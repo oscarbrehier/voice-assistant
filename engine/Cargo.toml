@@ -35,3 +35,6 @@ tokio-tungstenite = "0.29.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 sysinfo = "0.38.4"
 all-smi = "0.20.1"
+walkdir = "2.5.0"
+fuzzy-matcher = "0.3.7"
+strsim = "0.11.1"

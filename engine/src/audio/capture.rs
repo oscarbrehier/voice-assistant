@@ -21,6 +21,7 @@ use crate::{
         Packet,
         utils::{BiquadFilter, has_speech, to_mono},
     },
+    state::SharedContext,
 };
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
@@ -187,6 +188,7 @@ pub fn run_vad_loop(
     channels: usize,
     assistant_active: Arc<AtomicBool>,
     state: Arc<AtomicU8>,
+    ctx: SharedContext,
 ) {
     let vad_chunk_duration_spec = 2;
     let pulse_chunk_duration_ms = 50;
@@ -218,7 +220,7 @@ pub fn run_vad_loop(
 
         let current_state = state.load(Ordering::SeqCst);
 
-        if current_state == State::Processing as u8 || current_state == State::Speaking as u8 {
+        if current_state == State::Processing as u8 {
             let mut queue = audio_buffer.lock().unwrap();
             queue.clear();
             drop(queue);
@@ -271,11 +273,13 @@ pub fn run_vad_loop(
         }
 
         if assistant_active.load(Ordering::SeqCst) {
-            last_speech_instant = std::time::Instant::now();
+            if current_state != State::Speaking as u8 {
+                last_speech_instant = std::time::Instant::now();
 
-            queue.clear();
-            speech_buffer.clear();
-            continue;
+                queue.clear();
+                speech_buffer.clear();
+                continue;
+            }
         }
 
         if queue.len() >= vad_chunk_size {
@@ -295,8 +299,24 @@ pub fn run_vad_loop(
 
             let current_state = state.load(Ordering::SeqCst);
 
-            if has_speech(&mono, 0.015) {
+            let threshold = if current_state == State::Speaking as u8 {
+                0.08
+            } else {
+                0.015
+            };
+
+            if has_speech(&mono, threshold) {
                 last_speech_instant = std::time::Instant::now();
+
+                if current_state == State::Speaking as u8 {
+                    {
+                        let mut player_lock = ctx.audio_player.write().unwrap();
+                        *player_lock = None;
+                        println!("audio detected stopping player");
+                    }
+
+                    State::broadcast(State::Active, &state, &tx);
+                }
 
                 if current_state == State::Idle as u8 {
                     State::broadcast(State::Recording, &state, &tx);
