@@ -273,8 +273,10 @@ pub fn run_vad_loop(
         }
 
         if assistant_active.load(Ordering::SeqCst) {
-            if current_state != State::Speaking as u8 {
-                last_speech_instant = std::time::Instant::now();
+            last_speech_instant = std::time::Instant::now();
+
+            if current_state == State::Processing as u8 {
+                let mut queue = audio_buffer.lock().unwrap();
 
                 queue.clear();
                 speech_buffer.clear();

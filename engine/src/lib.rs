@@ -22,7 +22,7 @@ use crate::{
             stt_service::STTService,
             worker::{WorkerContext, spawn_transcription_worker},
         },
-        tts::TTSService,
+        tts::TTSService, voice::SpeakerID,
     },
     commands::CommandMatcher,
     config::Config,
@@ -90,10 +90,10 @@ impl ActiveGuard {
 
 impl Drop for ActiveGuard {
     fn drop(&mut self) {
-        std::thread::sleep(Duration::from_millis(500));
+        // std::thread::sleep(Duration::from_millis(500));
 
         self.assistant.store(false, Ordering::SeqCst);
-        State::broadcast(State::Idle, &self.state, &self.tx);
+        State::broadcast(State::Active, &self.state, &self.tx);
     }
 }
 
@@ -164,6 +164,11 @@ pub async fn start_engine(
     let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
     let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
 
+    // let speaker_id = SpeakerID::new("model_path", 0.75)?;
+
+    // let voice_samples = read_wav_file("voice.wav");
+    // speaker_id.enroll(&voice_samples)?;
+    
     let bridge_state = shared_context.engine_state.clone();
     let bridge_tx_ext = tx_external.clone();
     let mut bridge_rx_int = tx_internal.subscribe();

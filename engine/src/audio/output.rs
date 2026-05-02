@@ -12,7 +12,7 @@ pub fn play_mp3_audio(path: &str, context: SharedContext) -> anyhow::Result<()> 
     let file = std::fs::File::open(path)?;
     let source = Decoder::new(BufReader::new(file))
         .map_err(|e| anyhow::anyhow!("Failed to decode mp3: {e}"))?;
-    
+
     player.append(source);
     
     {
