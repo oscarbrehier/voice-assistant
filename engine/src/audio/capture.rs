@@ -13,6 +13,7 @@ use cpal::{
     Device, Stream, SupportedStreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
+use num_traits::FromPrimitive;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -187,7 +188,6 @@ pub fn run_vad_loop(
     sample_rate: usize,
     channels: usize,
     assistant_active: Arc<AtomicBool>,
-    state: Arc<AtomicU8>,
     ctx: SharedContext,
 ) {
     let vad_chunk_duration_spec = 2;
@@ -218,9 +218,13 @@ pub fn run_vad_loop(
     while running.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(10));
 
-        let current_state = state.load(Ordering::SeqCst);
+        let current_state_u8 = ctx.engine_state.load(Ordering::SeqCst);
+        let current_state = State::from_u8(current_state_u8).unwrap_or(State::Idle);
 
-        if current_state == State::Processing as u8 {
+        let should_ignore = current_state == State::Processing
+            || (current_state == State::Speaking && !ctx.speaker.read().is_enrolled());
+
+        if should_ignore {
             let mut queue = audio_buffer.lock().unwrap();
             queue.clear();
             drop(queue);
@@ -251,19 +255,19 @@ pub fn run_vad_loop(
             let transient_ratio = if average > 0.0 { peak / average } else { 0.0 };
 
             if transient_tracker.process(peak, transient_ratio) {
-                println!("clap detected: peak {} state {}", peak, current_state);
-                if current_state == State::Idle as u8 || current_state == State::Recording as u8 {
+                println!("clap detected: peak {} state {}", peak, current_state_u8);
+                if current_state == State::Idle || current_state == State::Recording {
                     println!("clap detected, state changed");
-                    State::broadcast(State::Active, &state, &tx);
+                    State::broadcast(State::Active, &ctx.engine_state, &tx);
                 }
             }
 
             let _ = tx.send(Packet::Pulse(pulse_mono));
         }
 
-        if current_state == State::Active as u8 {
+        if current_state == State::Active {
             if last_speech_instant.elapsed() > timeout {
-                State::broadcast(State::Idle, &state, &tx);
+                State::broadcast(State::Idle, &ctx.engine_state, &tx);
             }
         }
 
@@ -275,7 +279,7 @@ pub fn run_vad_loop(
         if assistant_active.load(Ordering::SeqCst) {
             last_speech_instant = std::time::Instant::now();
 
-            if current_state == State::Processing as u8 {
+            if current_state == State::Processing {
                 let mut queue = audio_buffer.lock().unwrap();
 
                 queue.clear();
@@ -299,9 +303,10 @@ pub fn run_vad_loop(
 
             circular_buffer.push(&mono);
 
-            let current_state = state.load(Ordering::SeqCst);
+            let current_state_u8 = ctx.engine_state.load(Ordering::SeqCst);
+            let current_state = State::from_u8(current_state_u8).unwrap_or(State::Idle);
 
-            let threshold = if current_state == State::Speaking as u8 {
+            let threshold = if current_state == State::Speaking {
                 0.08
             } else {
                 0.015
@@ -310,21 +315,25 @@ pub fn run_vad_loop(
             if has_speech(&mono, threshold) {
                 last_speech_instant = std::time::Instant::now();
 
-                if current_state == State::Speaking as u8 {
+                if current_state == State::Speaking {
                     {
                         let mut player_lock = ctx.audio_player.write().unwrap();
                         *player_lock = None;
                         println!("audio detected stopping player");
                     }
 
-                    State::broadcast(State::Active, &state, &tx);
+                    if ctx.speaker.read().is_enrolled() {
+                        State::broadcast(State::Active, &ctx.engine_state, &tx);
+                    } else {
+                        State::broadcast(State::Enrolling, &ctx.engine_state, &tx);
+                    }
                 }
 
-                if current_state == State::Idle as u8 {
-                    State::broadcast(State::Recording, &state, &tx);
+                if current_state == State::Idle {
+                    State::broadcast(State::Recording, &ctx.engine_state, &tx);
                 }
 
-                let updated_state = state.load(Ordering::SeqCst);
+                let updated_state = ctx.engine_state.load(Ordering::SeqCst);
 
                 if updated_state == State::Recording as u8 && circular_buffer.full {
                     let wake_word_audio = circular_buffer.get_all();
@@ -332,7 +341,7 @@ pub fn run_vad_loop(
                     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
                 }
 
-                if updated_state == State::Active as u8 {
+                if updated_state == State::Active as u8 || updated_state == State::Enrolling as u8 {
                     if speech_buffer.len() + mono.len() > max_speech_samples {
                         if !speech_buffer.is_empty() {
                             let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
@@ -352,8 +361,8 @@ pub fn run_vad_loop(
                     if silence_counter >= silence_threshold_chunks {
                         let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
 
-                        if current_state == State::Recording as u8 {
-                            State::broadcast(State::Idle, &state, &tx);
+                        if current_state == State::Recording {
+                            State::broadcast(State::Idle, &ctx.engine_state, &tx);
                         }
 
                         silence_counter = 0;
@@ -373,7 +382,7 @@ pub fn run_vad_loop(
                 speech_buffer.len()
             );
             speech_buffer.clear();
-            State::broadcast(State::Idle, &state, &tx);
+            State::broadcast(State::Idle, &ctx.engine_state, &tx);
         }
     }
 }

@@ -22,7 +22,8 @@ use crate::{
             stt_service::STTService,
             worker::{WorkerContext, spawn_transcription_worker},
         },
-        tts::TTSService, voice::SpeakerID,
+        tts::TTSService,
+        voice::SpeakerID,
     },
     commands::CommandMatcher,
     config::Config,
@@ -58,6 +59,7 @@ pub enum State {
     Active = 2,
     Processing = 3,
     Speaking = 4,
+    Enrolling = 5
 }
 
 impl State {
@@ -138,10 +140,13 @@ pub async fn start_engine(
     let sample_rate = stream_config.sample_rate() as usize;
     let channels = stream_config.channels() as usize;
 
+    let speaker_id = SpeakerID::new("engine/models/voxceleb_CAM++_LM.onnx", Some("voices/voice_1.bin"), 0.75)?;
+
     let shared_context: SharedContext = Arc::new(GlobalContext {
         telemetry: Arc::new(RwLock::new(Vitals::default())),
         audio_player: Arc::new(RwLock::new(None)),
-        engine_state: Arc::new(AtomicU8::new(State::Idle as u8))
+        engine_state: Arc::new(AtomicU8::new(State::Idle as u8)),
+        speaker: Arc::new(parking_lot::RwLock::new(speaker_id))
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
@@ -164,11 +169,6 @@ pub async fn start_engine(
     let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
     let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
 
-    // let speaker_id = SpeakerID::new("model_path", 0.75)?;
-
-    // let voice_samples = read_wav_file("voice.wav");
-    // speaker_id.enroll(&voice_samples)?;
-    
     let bridge_state = shared_context.engine_state.clone();
     let bridge_tx_ext = tx_external.clone();
     let mut bridge_rx_int = tx_internal.subscribe();
@@ -203,6 +203,25 @@ pub async fn start_engine(
         }
     });
 
+    let speaker_handle = shared_context.speaker.read();
+
+    if !speaker_handle.is_enrolled() {
+
+        shared_context.engine_state.store(State::Enrolling as u8, Ordering::SeqCst);
+
+        let script = "
+Greetings. Initializing voice authentication setup. I need to capture a high-quality voiceprint to calibrate my recognition engine.
+            ";
+
+        // tts.speak_async(script, shared_context.clone(), &tx_internal).await?;
+
+        // let mut lock = audio_buffer.lock().unwrap();
+        // lock.clear();
+        // drop(lock);
+        //
+        println!("The quick brown fox jumps over the lazy dog, but the rainy weather in Paris might slow him down today.");
+    }
+
     let assistant_active_worker = assistant_active.clone();
 
     let stt_state = shared_context.engine_state.clone();
@@ -216,7 +235,7 @@ pub async fn start_engine(
         sample_rate,
         config,
         memory: worker_memory,
-        global_ctx: shared_context.clone()
+        global_ctx: shared_context.clone(),
     };
 
     let worker_tx = tx_internal.clone();
@@ -226,14 +245,12 @@ pub async fn start_engine(
         rx_internal,
         worker_context,
         assistant_active_worker,
-        stt_state,
+        // stt_state,
     );
 
     let engine_tx = tx_internal.clone();
-    let vad_state = shared_context.engine_state.clone();
-
     let vad_context = shared_context.clone();
-    
+
     tokio::task::spawn_blocking(move || {
         run_vad_loop(
             running,
@@ -242,8 +259,7 @@ pub async fn start_engine(
             sample_rate,
             channels,
             assistant_active,
-            vad_state,
-            vad_context
+            vad_context,
         );
     });
 

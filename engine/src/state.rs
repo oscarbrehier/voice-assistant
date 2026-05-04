@@ -1,6 +1,8 @@
-use std::sync::{Arc, RwLock, atomic::AtomicU8};
+use std::sync::{Arc, RwLock, atomic::{AtomicBool, AtomicU8}};
 
 use serde::Serialize;
+
+use crate::audio::voice::SpeakerID;
 
 #[derive(Default, Serialize, Clone)]
 pub struct Vitals {
@@ -14,7 +16,8 @@ pub struct Vitals {
 pub struct GlobalContext {
     pub telemetry: Arc<RwLock<Vitals>>,
     pub audio_player: Arc<RwLock<Option<rodio::Player>>>,
-    pub engine_state: Arc<AtomicU8>
+    pub engine_state: Arc<AtomicU8>,
+    pub speaker: Arc<parking_lot::RwLock<SpeakerID>>
 }
 
 impl GlobalContext {

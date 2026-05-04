@@ -27,8 +27,9 @@ impl TTSService {
         text: &str,
         shared_context: SharedContext,
         sender: &broadcast::Sender<Packet>,
+        next_state: Option<State>
     ) -> anyhow::Result<()> {
-        self.perform_speech(text.to_string(), shared_context, sender.clone())
+        self.perform_speech(text.to_string(), shared_context, sender.clone(), next_state)
             .await
     }
 
@@ -37,6 +38,7 @@ impl TTSService {
         text: &str,
         shared_context: SharedContext,
         sender: &broadcast::Sender<Packet>,
+        next_state: Option<State>
     ) -> anyhow::Result<()> {
         let self_clone = self.clone();
         let ctx_clone = shared_context.clone();
@@ -45,10 +47,10 @@ impl TTSService {
 
         tokio::spawn(async move {
             if let Err(e) = self_clone
-                .perform_speech(text_string, ctx_clone, tx_clone)
+                .perform_speech(text_string, ctx_clone, tx_clone, next_state)
                 .await
             {
-                eprintln!("Background TTS error: {}", e);
+                eprintln!("Background TTS error: {}", e); 
             }
         });
 
@@ -60,6 +62,7 @@ impl TTSService {
         text: String,
         shared_context: SharedContext,
         sender: broadcast::Sender<Packet>,
+        next_state: Option<State>
     ) -> anyhow::Result<()> {
         State::broadcast(State::Speaking, &shared_context.engine_state, &sender);
 
@@ -80,7 +83,8 @@ impl TTSService {
 
         tokio::task::spawn_blocking(move || play_mp3_audio(temp_path, ctx_clone)).await??;
 
-        State::broadcast(State::Active, &shared_context.engine_state, &sender);
+        let target_state = next_state.unwrap_or(State::Active);
+        State::broadcast(target_state, &shared_context.engine_state, &sender);
 
         Ok(())
     }

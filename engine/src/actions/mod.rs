@@ -73,7 +73,7 @@ pub fn handle_action(
     match action.execute(template)? {
         ActionResult::Success => Ok(()),
         ActionResult::Message(msg) => {
-            tts.speak(&msg, ctx, sender)?;
+            tts.speak(&msg, ctx, sender, None)?;
             Ok(())
         }
     }

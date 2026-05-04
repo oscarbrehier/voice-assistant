@@ -4,6 +4,8 @@
 **/models/
 **/voices/
 
+voices/*
+
 **/*.wav
 **/*.mp3
 **/*.rpw

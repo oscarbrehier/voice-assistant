@@ -39,3 +39,6 @@ fuzzy-matcher = "0.3.7"
 strsim = "0.11.1"
 ort = { version = "2.0.0-rc.12", features = ["ndarray"] }
 ndarray = "0.17.2"
+bincode = "1.3"
+mel_spec = "0.3.4"
+parking_lot = "0.12.5"

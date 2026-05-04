@@ -47,12 +47,12 @@ impl SpeakerID {
             .map_err(|e| anyhow::anyhow!("Failed to load model: {}", e))?;
 
         let embedding = match profile_path {
-            Some(p) => {
+            Some(p) if p.as_ref().exists() => {
                 let bytes = std::fs::read(p.as_ref())?;
                 let decoded: Vec<f32> = bincode::deserialize(&bytes)?;
                 Some(decoded)
             }
-            None => None,
+            _ => None,
         };
 
         let enrolment_state = if embedding.is_some() {
