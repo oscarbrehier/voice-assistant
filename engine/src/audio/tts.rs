@@ -1,10 +1,18 @@
-use std::{path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicU8, Ordering}}};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 use anyhow::Ok;
 use tokio::sync::broadcast;
 
 use crate::{Packet, State, audio::output::play_mp3_audio, state::SharedContext};
 
+#[derive(Clone)]
 pub struct TTSService {
     script_dir: PathBuf,
 }
@@ -14,25 +22,65 @@ impl TTSService {
         Self { script_dir }
     }
 
-    pub fn speak(&self, text: &str, shared_context: SharedContext, sender: &broadcast::Sender<Packet>) -> anyhow::Result<()> {
+    pub async fn speak_async(
+        &self,
+        text: &str,
+        shared_context: SharedContext,
+        sender: &broadcast::Sender<Packet>,
+    ) -> anyhow::Result<()> {
+        self.perform_speech(text.to_string(), shared_context, sender.clone())
+            .await
+    }
 
+    pub fn speak(
+        &self,
+        text: &str,
+        shared_context: SharedContext,
+        sender: &broadcast::Sender<Packet>,
+    ) -> anyhow::Result<()> {
+        let self_clone = self.clone();
+        let ctx_clone = shared_context.clone();
+        let tx_clone = sender.clone();
+        let text_string = text.to_string();
+
+        tokio::spawn(async move {
+            if let Err(e) = self_clone
+                .perform_speech(text_string, ctx_clone, tx_clone)
+                .await
+            {
+                eprintln!("Background TTS error: {}", e);
+            }
+        });
+
+        Ok(())
+    }
+
+    async fn perform_speech(
+        &self,
+        text: String,
+        shared_context: SharedContext,
+        sender: broadcast::Sender<Packet>,
+    ) -> anyhow::Result<()> {
         State::broadcast(State::Speaking, &shared_context.engine_state, &sender);
-        
-		let script_path = self.script_dir.join("tts_service.py");
-        
-        let status = Command::new("python")
+
+        let script_path = self.script_dir.join("tts_service.py");
+
+        let status = tokio::process::Command::new("python")
             .arg(script_path)
-			.arg(text)
-            .status()?;
-        
+            .arg(text)
+            .status()
+            .await?;
+
         if !status.success() {
             anyhow::bail!("TTS generation failed");
         }
-        
-        let temp_path = "output.mp3";
-        play_mp3_audio(temp_path, shared_context.clone())?;
 
-       State::broadcast(State::Active, &shared_context.engine_state, &sender);
+        let temp_path = "output.mp3";
+        let ctx_clone = shared_context.clone();
+
+        tokio::task::spawn_blocking(move || play_mp3_audio(temp_path, ctx_clone)).await??;
+
+        State::broadcast(State::Active, &shared_context.engine_state, &sender);
 
         Ok(())
     }
