@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{default, path::Path};
 
 use ort::session::Session;
 
@@ -10,14 +10,16 @@ pub struct EnrolmentState {
     pub current_step: usize,
     pub max_steps: usize,
     pub accumulated_embedding: Vec<Vec<f32>>,
+    pub negative_embeddings: Vec<Vec<f32>>,
 }
 
 impl EnrolmentState {
     pub fn new() -> Self {
         Self {
             current_step: 0,
-            max_steps: 5,
+            max_steps: 10,
             accumulated_embedding: Vec::new(),
+            negative_embeddings: Vec::new(),
         }
     }
 }
@@ -25,7 +27,9 @@ impl EnrolmentState {
 pub struct SpeakerID {
     pub session: Session,
     pub reference_embedding: Option<Vec<f32>>,
+    pub negative_embeddings: Vec<Vec<f32>>,
     pub similarity_threshold: f32,
+    pub recent_scores: Vec<f32>,
     pub enrolment_state: Option<EnrolmentState>,
 }
 
@@ -46,13 +50,18 @@ impl SpeakerID {
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load model: {}", e))?;
 
-        let embedding = match profile_path {
+        let (embedding, negative_embeddings) = match profile_path {
             Some(p) if p.as_ref().exists() => {
                 let bytes = std::fs::read(p.as_ref())?;
-                let decoded: Vec<f32> = bincode::deserialize(&bytes)?;
-                Some(decoded)
+
+                if let Ok((pos, neg)) = bincode::deserialize::<(Vec<f32>, Vec<Vec<f32>>)>(&bytes) {
+                    (Some(pos), neg)
+                } else {
+                    let decoded: Vec<f32> = bincode::deserialize(&bytes)?;
+                    (Some(decoded), Vec::new())
+                }
             }
-            _ => None,
+            _ => (None, Vec::new()),
         };
 
         let enrolment_state = if embedding.is_some() {
@@ -64,13 +73,46 @@ impl SpeakerID {
         Ok(Self {
             session,
             reference_embedding: embedding,
+            negative_embeddings,
             similarity_threshold: threshold,
+            recent_scores: Vec::new(),
             enrolment_state,
         })
     }
 
+    pub fn save_profile(&self) -> anyhow::Result<()> {
+        let reference = self
+            .reference_embedding
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No reference embedding to save"))?;
+
+        let data_to_save = (reference.clone(), self.negative_embeddings.clone());
+
+        let neg_count = data_to_save.1.len();
+
+        let encoded = bincode::serialize(&data_to_save)?;
+
+        std::fs::create_dir_all("voices")?;
+        std::fs::write("voices/voice_1.bin", encoded)?;
+
+        Ok(())
+    }
+
     pub fn is_enrolled(&self) -> bool {
         self.reference_embedding.is_some()
+    }
+
+    pub fn get_adaptive_threshold(&self) -> f32 {
+        if self.recent_scores.len() < 10 {
+            return self.similarity_threshold;
+        }
+
+        let mut sorted = self.recent_scores.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let percentile_85 = sorted[(sorted.len() as f32 * 0.85) as usize];
+
+        percentile_85.max(self.similarity_threshold)
     }
 
     pub fn add_enrollment_sample(&mut self, audio_samples: &[f32]) -> anyhow::Result<bool> {
@@ -94,6 +136,18 @@ impl SpeakerID {
         }
 
         Ok(false)
+    }
+
+    pub fn add_negative_sample(&mut self, audio_samples: &[f32]) -> anyhow::Result<()> {
+        let embedding = self.extract_embedding(audio_samples)?;
+
+        if let Some(state) = &mut self.enrolment_state {
+            state.negative_embeddings.push(embedding.clone());
+        }
+
+        self.negative_embeddings.push(embedding);
+
+        Ok(())
     }
 
     fn finalize_enrolment(&mut self) -> anyhow::Result<()> {
@@ -120,7 +174,10 @@ impl SpeakerID {
 
         self.reference_embedding = Some(normalized.clone());
 
-        let encoded = bincode::serialize(&normalized)?;
+        self.negative_embeddings = state.negative_embeddings;
+
+        let data_to_save = (normalized, self.negative_embeddings.clone());
+        let encoded = bincode::serialize(&data_to_save)?;
 
         std::fs::create_dir_all("voices")?;
         std::fs::write("voices/voice_1.bin", encoded)?;
@@ -147,30 +204,165 @@ impl SpeakerID {
         Ok(similarity >= self.similarity_threshold)
     }
 
-    fn extract_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<f32>> {
-        let config = FbankConfig::default();
-        let fbank = Fbank::new(config);
+    pub fn verify_with_negative_check(
+        &mut self,
+        candidate_samples: &[f32],
+        sample_rate: usize,
+    ) -> anyhow::Result<bool> {
+        let resampled_data = resample_to_16khz(candidate_samples, sample_rate);
 
+        let reference = self
+            .reference_embedding
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("SpeakerID has no enrolled reference"))?;
+
+        let candidate = self.extract_embedding(&resampled_data)?;
+
+        let positive_sim = self.cosine_similarity(&reference, &candidate);
+
+        let negative_sim = if !self.negative_embeddings.is_empty() {
+            let sum: f32 = self.negative_embeddings
+                .iter()
+                .map(|neg_emb| self.cosine_similarity(neg_emb, &candidate))
+                .sum();
+
+            sum / self.negative_embeddings.len() as f32
+        } else {
+            0.0
+        };
+
+        let margin = 0.20;
+        let threshold = self.get_adaptive_threshold();
+
+        let is_positive_enough = positive_sim >= threshold;
+        let is_distinctive_from_else = (positive_sim - negative_sim) >= margin;
+        
+        let decision = is_positive_enough && is_distinctive_from_else;
+
+        println!(
+            "Positive: {:.4}, Negative: {:.4}, Margin: {:.4}, Decision: {}",
+            positive_sim,
+            negative_sim,
+            positive_sim - negative_sim,
+            decision
+        );
+
+        self.recent_scores.push(positive_sim);
+        if self.recent_scores.len() > 100 {
+            self.recent_scores.remove(0);
+        }
+
+        Ok(decision)
+    }
+
+    // fn extract_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<f32>> {
+    //     let spec = hound::WavSpec {
+    //         channels: 1,
+    //         sample_rate: 16000,
+    //         bits_per_sample: 16,
+    //         sample_format: hound::SampleFormat::Int,
+    //     };
+
+    //     if let Ok(mut writer) = hound::WavWriter::create("debug_input.wav", spec) {
+    //         for &sample in samples {
+    //             let amplified = (sample * i16::MAX as f32) as i16;
+    //             writer.write_sample(amplified).ok();
+    //         }
+    //         writer.finalize().ok();
+    //         println!("DEBUG: Saved audio to debug_input.wav");
+    //     }
+
+    //     let config = FbankConfig {
+    //         num_mel_bins: 80,
+    //         sample_rate: 16000.0,
+    //         frame_length_ms: 25.0,
+    //         frame_shift_ms: 10.0,
+    //         ..FbankConfig::default()
+    //     };
+    //     let fbank = Fbank::new(config);
+
+    //     let features = fbank.compute(samples);
+    //     let (t_dim, mel_dim) = (features.nrows(), features.ncols());
+
+    //     let mut raw_data: Vec<f32> = features.iter().cloned().collect();
+
+    //     for m in 0..mel_dim {
+    //         let mut sum = 0.0;
+    //         for t in 0..t_dim {
+    //             sum += raw_data[t * mel_dim + m];
+    //         }
+
+    //         let mean = sum / t_dim as f32;
+
+    //         let mut var_sum = 0.0;
+    //         for t in 0..t_dim {
+    //             let diff = raw_data[t * mel_dim + m] - mean;
+    //             var_sum += diff * diff;
+    //         }
+
+    //         let std_dev = (var_sum / t_dim as f32).sqrt().max(1e-6);
+
+    //         for t in 0..t_dim {
+    //             raw_data[t * mel_dim + m] = (raw_data[t * mel_dim + m] - mean) / std_dev;
+    //         }
+    //     }
+
+    //     let array_3d = ndarray::Array3::from_shape_vec((1, t_dim, mel_dim), raw_data)?;
+
+    //     let input_tensor = ort::value::Value::from_array(array_3d)?;
+    //     let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
+
+    //     let output_value = outputs
+    //         .get("embs")
+    //         .ok_or_else(|| anyhow::anyhow!("Output 'embs' not found"))?;
+
+    //     let (_, extracted_slice) = output_value.try_extract_tensor::<f32>()?;
+
+    //     let mut emb = extracted_slice.to_vec();
+    //     let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+    //     emb.iter_mut().for_each(|x| *x /= norm);
+
+    //     Ok(emb)
+    // }
+    //
+    //
+    // 
+    fn extract_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<f32>> {
+        let config = FbankConfig {
+            num_mel_bins: 80,
+            sample_rate: 16000.0,
+            frame_length_ms: 25.0,
+            frame_shift_ms: 10.0,
+            ..FbankConfig::default()
+        };
+        let fbank = Fbank::new(config);
         let features = fbank.compute(samples);
+
         let (t_dim, mel_dim) = (features.nrows(), features.ncols());
 
-        let raw_data = features
-            .as_slice()
-            .map(|s| s.to_vec())
-            .ok_or_else(|| anyhow::anyhow!("Could not flatten features"))?;
+        let mut standardized_data = Vec::with_capacity(t_dim * mel_dim);
 
-        let array_3d = ndarray::Array3::from_shape_vec((1, t_dim, mel_dim), raw_data)?;
+        for t in 0..t_dim {
+            for m in 0..mel_dim {
+                standardized_data.push(features[(t, m)]);
+            }
+        }
 
+        let array_3d = ndarray::Array3::from_shape_vec((1, t_dim, mel_dim), standardized_data)?;
         let input_tensor = ort::value::Value::from_array(array_3d)?;
-        let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
 
+        let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
         let output_value = outputs
             .get("embs")
-            .ok_or_else(|| anyhow::anyhow!("Output 'embs' not found"))?;
-
+            .ok_or_else(|| anyhow::anyhow!("No embs"))?;
         let (_, extracted_slice) = output_value.try_extract_tensor::<f32>()?;
 
-        Ok(extracted_slice.to_vec())
+        let mut emb = extracted_slice.to_vec();
+        let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+        emb.iter_mut().for_each(|x| *x /= norm);
+
+        Ok(emb)
     }
 
     fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {

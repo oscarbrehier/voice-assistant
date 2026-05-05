@@ -16,14 +16,10 @@ use tokio::sync::broadcast;
 
 use crate::{
     audio::{
-        capture::{init_audio_capture, run_vad_loop},
-        setup_audio_device,
-        stt::{
+        capture::{init_audio_capture, run_vad_loop}, onboarding, setup_audio_device, stt::{
             stt_service::STTService,
             worker::{WorkerContext, spawn_transcription_worker},
-        },
-        tts::TTSService,
-        voice::SpeakerID,
+        }, tts::TTSService, voice::SpeakerID
     },
     commands::CommandMatcher,
     config::Config,
@@ -59,7 +55,8 @@ pub enum State {
     Active = 2,
     Processing = 3,
     Speaking = 4,
-    Enrolling = 5
+    Enrolling = 5,
+    Calibrating = 6
 }
 
 impl State {
@@ -140,7 +137,7 @@ pub async fn start_engine(
     let sample_rate = stream_config.sample_rate() as usize;
     let channels = stream_config.channels() as usize;
 
-    let speaker_id = SpeakerID::new("engine/models/voxceleb_CAM++_LM.onnx", Some("voices/voice_1.bin"), 0.75)?;
+    let speaker_id = SpeakerID::new("engine/models/voxceleb_ECAPA1024.onnx", Some("voices/voice_1.bin"), 0.35)?;
 
     let shared_context: SharedContext = Arc::new(GlobalContext {
         telemetry: Arc::new(RwLock::new(Vitals::default())),
@@ -203,33 +200,14 @@ pub async fn start_engine(
         }
     });
 
-    let speaker_handle = shared_context.speaker.read();
-
-    if !speaker_handle.is_enrolled() {
-
-        shared_context.engine_state.store(State::Enrolling as u8, Ordering::SeqCst);
-
-        let script = "
-Greetings. Initializing voice authentication setup. I need to capture a high-quality voiceprint to calibrate my recognition engine.
-            ";
-
-        // tts.speak_async(script, shared_context.clone(), &tx_internal).await?;
-
-        // let mut lock = audio_buffer.lock().unwrap();
-        // lock.clear();
-        // drop(lock);
-        //
-        println!("The quick brown fox jumps over the lazy dog, but the rainy weather in Paris might slow him down today.");
-    }
-
     let assistant_active_worker = assistant_active.clone();
 
-    let stt_state = shared_context.engine_state.clone();
     let worker_memory = Arc::new(tokio::sync::Mutex::new(memory));
+    let worker_tts = tts.clone();
 
     let worker_context = WorkerContext {
         stt,
-        tts,
+        tts: worker_tts,
         command_matcher,
         llm_engine,
         sample_rate,
@@ -245,7 +223,6 @@ Greetings. Initializing voice authentication setup. I need to capture a high-qua
         rx_internal,
         worker_context,
         assistant_active_worker,
-        // stt_state,
     );
 
     let engine_tx = tx_internal.clone();
@@ -262,6 +239,12 @@ Greetings. Initializing voice authentication setup. I need to capture a high-qua
             vad_context,
         );
     });
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    if let Err(e) = onboarding::run_startup_verifications(shared_context.clone(), &tts, &tx_internal).await {
+        eprintln!("Startup verification error: {e}");
+    }
 
     Ok((tx_external, stream))
 }

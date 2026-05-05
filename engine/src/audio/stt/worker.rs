@@ -11,7 +11,7 @@ use crate::{
     ActiveGuard, State,
     actions::{Action, ActionResult, handle_action},
     audio::{
-        Packet, stt::stt_service::STTService, tts::TTSService, utils::resample_to_16khz,
+        Packet, stt::stt_service::STTService, tts::{TTSService, run_self_calibration}, utils::resample_to_16khz,
         voice::SpeakerID,
     },
     commands::CommandMatcher,
@@ -121,7 +121,7 @@ async fn process_speech_logic(
                     }
 
                     if !final_message.is_empty() {
-                        if let Err(e) = ctx.tts.speak(&final_message, ctx.global_ctx.clone(), &tx, None) {
+                        if let Err(e) = ctx.tts.speak(&final_message, ctx.global_ctx.clone(), &tx, None, false) {
                             eprintln!("failed to generate speech: {e}");
                         }
                     }
@@ -151,14 +151,18 @@ pub async fn handle_enrollment(
     data: Vec<f32>,
     ctx: &mut WorkerContext,
     tx: &broadcast::Sender<Packet>,
-    assistant_active: &Arc<AtomicBool>,
 ) {
     let enrollment_scripts = [
         "The quick brown fox jumps over the lazy dog, but the rainy weather in Paris might slow him down today.",
-        "My voice is my unique password, and it grants me secure access to this system.",
-        "Hey Joe, set a timer for fifteen minutes and remind me to check the oven.",
-        "I'm currently integrating several different modules into this Rust project to make everything run as efficiently as possible.",
-        "Confirm authorization. Everything looks good, let's get started.",
+        "My voice is my unique password, and it grants me secure access to this system whenever I need it.",
+        "Hey assistant, set a timer for fifteen minutes and remind me to check the oven before it burns.",
+        "I'm currently integrating several different modules into this Rust project to make everything run smoothly and efficiently.",
+        "Confirm authorization now. Everything looks good on my end, so let's get started with the process.",
+        "Beautiful azure skies stretched endlessly above the mountainous terrain, while golden sunlight filtered through scattered clouds.",
+        "Technology evolves rapidly, but human creativity and intuition remain irreplaceable in solving complex problems.",
+        "Please schedule a meeting for Thursday afternoon and send the presentation files to everyone on the team.",
+        "The experimental prototype exceeded expectations during testing, demonstrating both reliability and exceptional performance metrics.",
+        "Listening carefully to diverse perspectives helps us understand nuanced situations and make better informed decisions together.",
     ];
 
     let step = ctx
@@ -198,18 +202,29 @@ pub async fn handle_enrollment(
             Ok(is_complete) => {
                 if is_complete {
                     let _ = ctx.tts.speak(
-                        "Voice profile saved successfully.",
+                        "Voice profile saved successfully. Now, please stay quiet while I calibrate my own voice.",
                         ctx.global_ctx.clone(),
                         tx,
-                        None
+                        None,
+                        false
                     );
-                    State::broadcast(State::Idle, &ctx.global_ctx.engine_state, tx);
+
+                    let cal_ctx = ctx.global_ctx.clone();
+                    let cal_tts = ctx.tts.clone();
+                    let cal_tx = tx.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = run_self_calibration(cal_ctx, &cal_tts, &cal_tx).await {
+                            eprintln!("Calibration error {e}");
+                        }
+                    });
+                    
                 } else {
                     let next_step = step + 1;
                     if let Some(next_script) = enrollment_scripts.get(next_step) {
                         let next_msg = format!("Got it! Next, please say");
                         println!("{}", next_script);
-                        let _ = ctx.tts.speak(&next_msg, ctx.global_ctx.clone(), tx, Some(State::Enrolling));
+                        let _ = ctx.tts.speak(&next_msg, ctx.global_ctx.clone(), tx, Some(State::Enrolling), false);
                         State::broadcast(State::Enrolling, &ctx.global_ctx.engine_state, tx);
                     }
                 }
@@ -219,7 +234,8 @@ pub async fn handle_enrollment(
                     "Audio quality was too low. Please try again.",
                     ctx.global_ctx.clone(),
                     tx,
-                    Some(State::Enrolling)
+                    Some(State::Enrolling),
+                    false
                 );
                 State::broadcast(State::Enrolling, &ctx.global_ctx.engine_state, tx);
             }
@@ -230,7 +246,7 @@ pub async fn handle_enrollment(
                 "I didn't catch that quite right. Please repeat: {}",
                 target_script
             );
-            let _ = ctx.tts.speak(&retry_msg, ctx.global_ctx.clone(), tx, Some(State::Enrolling));
+            let _ = ctx.tts.speak(&retry_msg, ctx.global_ctx.clone(), tx, Some(State::Enrolling), false);
             State::broadcast(State::Enrolling, &ctx.global_ctx.engine_state, tx);
         }
     }
@@ -261,14 +277,25 @@ pub fn spawn_transcription_worker(
                         let current_state = ctx.global_ctx.engine_state.load(Ordering::SeqCst);
 
                         println!("current state: {}", current_state);
+
+                        if current_state == State::Calibrating as u8 {
+                            let resampled = resample_to_16khz(&data, ctx.sample_rate);
+
+                            let mut speaker = ctx.global_ctx.speaker.write();
+                            if let Err(e) = speaker.add_negative_sample(&resampled) {
+                                eprintln!("Failed to add negative sample: {e}");
+                            }
+
+                            let _ = speaker.save_profile();
+                            continue ;
+                        }
                         
                         if current_state == State::Enrolling as u8 {
                             handle_enrollment(
                                 transcription,
                                 data,
                                 &mut ctx,
-                                &tx,
-                                &assistant_active,
+                                &tx
                             )
                             .await;
                             continue;
@@ -287,7 +314,7 @@ pub fn spawn_transcription_worker(
 
                             let is_verified = {
                                 let mut handle = ctx.global_ctx.speaker.write();
-                                handle.verify(&data, ctx.sample_rate).unwrap_or(false)
+                                handle.verify_with_negative_check(&data, ctx.sample_rate).unwrap_or(false)
                             };
 
                             if !is_verified {
@@ -304,7 +331,7 @@ pub fn spawn_transcription_worker(
                         if current_state == State::Active as u8 {
                             let is_verified = {
                                 let mut handle = ctx.global_ctx.speaker.write();
-                                handle.verify(&data, ctx.sample_rate).unwrap_or(false)
+                                handle.verify_with_negative_check(&data, ctx.sample_rate).unwrap_or(false)
                             };
 
                             if !is_verified {
@@ -323,15 +350,10 @@ pub fn spawn_transcription_worker(
 
                         let has_wake_word = transcription.contains(&ctx.config.name);
 
-                        if has_wake_word {
-                            let is_verified = {
-                                let mut handle = ctx.global_ctx.speaker.write();
-                                handle.verify(&data, ctx.sample_rate).unwrap_or(false)
-                            };
+                        println!("has wake word: {}", has_wake_word);
 
-                            if is_verified {
-                                State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
-                            }
+                        if has_wake_word {
+                            State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
                         }
                     }
                 }
