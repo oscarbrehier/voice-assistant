@@ -13,6 +13,7 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 use num_traits::FromPrimitive;
+use ort::environment::current;
 use tokio::sync::broadcast;
 
 use crate::{
