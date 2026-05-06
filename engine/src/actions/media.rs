@@ -20,6 +20,6 @@ pub fn previous_track() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn adjust_volume(delta: i32) -> anyhow::Result<()> {
-    Ok(())
-}
+// pub fn adjust_volume(delta: i32) -> anyhow::Result<()> {
+//     Ok(())
+// }

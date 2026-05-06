@@ -1,10 +1,8 @@
-use engine::{start_engine, Packet};
-use engine::{EnginePaths, State};
-use serde::Serialize;
+use engine::{start_engine};
+use engine::{EnginePaths};
 use tauri::Manager;
 use tauri::{Emitter, PhysicalPosition};
 #[cfg(target_os = "windows")]
-use window_vibrancy::apply_acrylic;
 #[cfg(target_os = "macos")]
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
 

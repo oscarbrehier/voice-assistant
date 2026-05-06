@@ -2,8 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
-        mpsc,
+        atomic::{AtomicBool, Ordering}
     },
     thread,
     time::{Duration, Instant},
@@ -315,16 +314,25 @@ pub fn run_vad_loop(
             if has_speech(&mono, threshold) {
                 last_speech_instant = std::time::Instant::now();
 
-                if current_state == State::Speaking {
-                    {
-                        let mut player_lock = ctx.audio_player.write().unwrap();
-                        *player_lock = None;
-                        println!("audio detected stopping player");
-                    }
+                if current_state == State::Speaking && current_state != State::Calibrating {
+                    let is_enrolled = ctx.speaker.read().is_enrolled();
 
-                    if ctx.speaker.read().is_enrolled() {
-                        State::broadcast(State::Active, &ctx.engine_state, &tx);
+                    if is_enrolled {
+                        let candidate_audio = circular_buffer.get_all();
+
+                        let mut speaker_lock = ctx.speaker.write();
+                        let is_authorized = speaker_lock
+                            .verify_with_negative_check(&candidate_audio, sample_rate)
+                            .unwrap_or(false);
+
+                        if is_authorized {
+                            ctx.audio_player.write().take();
+                            State::broadcast(State::Active, &ctx.engine_state, &tx);
+                        } else {
+                            continue;
+                        }
                     } else {
+                        ctx.audio_player.write().take();
                         State::broadcast(State::Enrolling, &ctx.engine_state, &tx);
                     }
                 }
@@ -341,7 +349,11 @@ pub fn run_vad_loop(
                     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
                 }
 
-                if updated_state == State::Active as u8 || updated_state == State::Enrolling as u8 {
+                let is_collecting_speech = updated_state == State::Active as u8
+                    || updated_state == State::Enrolling as u8
+                    || updated_state == State::Calibrating as u8;
+
+                if is_collecting_speech {
                     if speech_buffer.len() + mono.len() > max_speech_samples {
                         if !speech_buffer.is_empty() {
                             let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));

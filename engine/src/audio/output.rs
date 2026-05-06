@@ -16,13 +16,13 @@ pub fn play_mp3_audio(path: &str, context: SharedContext) -> anyhow::Result<()> 
     player.append(source);
     
     {
-        let mut lock = context.audio_player.write().unwrap();
+        let mut lock = context.audio_player.write();
         *lock = Some(player);
     }
 
     loop {
         let (still_active, is_finished) = {
-            let lock = context.audio_player.read().unwrap();
+            let lock = context.audio_player.read();
             match &*lock {
                 Some(p) => {      
                     (true, p.len() == 0)
@@ -38,7 +38,7 @@ pub fn play_mp3_audio(path: &str, context: SharedContext) -> anyhow::Result<()> 
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    let mut lock = context.audio_player.write().unwrap();
+    let mut lock = context.audio_player.write();
     *lock = None;
 
     Ok(())

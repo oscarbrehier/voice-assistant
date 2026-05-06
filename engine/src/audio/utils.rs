@@ -1,5 +1,3 @@
-use std::f32::consts::PI;
-
 pub fn resample_to_16khz(audio: &[f32], from_rate: usize) -> Vec<f32> {
     if from_rate == 16000 {
         return audio.to_vec();

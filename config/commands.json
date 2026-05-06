@@ -1,52 +1,103 @@
 {
-  "static_commands": [
+  "tools": [
     {
-      "action": "PlayMusic",
-      "description": "Play/Pause the currently playing media",
-      "triggers": ["play music", "play song", "start song", "pause music"],
-      "generate_message": false
+      "type": "function",
+      "function": {
+        "name": "play_music",
+        "description": "Play or resume the currently playing media",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
     },
     {
-      "action": "NextTrack",
-      "description": "Skip to next track",
-      "triggers": ["play next track", "skip the current song"],
-      "generate_message": false
+      "type": "function",
+      "function": {
+        "name": "next_track",
+        "description": "Skip to next track",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
     },
     {
-      "action": "PreviousTrack",
-      "description": "Go back to the previous track",
-      "triggers": ["play the previous track"],
-      "generate_message": false
+      "type": "function",
+      "function": {
+        "name": "get_time",
+        "description": "Get the local time",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
     },
     {
-      "action": "GetTime",
-      "description": "Get the local time",
-      "triggers": ["what time is it", "give me the time"],
-      "generate_message": false
+      "type": "function",
+      "function": {
+        "name": "get_system_stats",
+        "description": "Retrieve real-time system vitals: CPU usage/temp, RAM usage, and Disk health",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
     },
     {
-      "action": "GetSystemStats",
-      "description": "Retrieve real-time system vitals: CPU usage/temp, RAM usage, and Disk health",
-      "triggers": ["vitals", "status", "how are we doing"],
-      "generate_message": true
-    }
-  ],
-  "dynamic_commands": [
-    {
-      "action": "OpenApp",
-      "description": "Open a specific app",
-      "patterns": ["open {}", "launch {}", "start {}"],
-      "regex": "^(?:open|launch|start)\\s+(\\w+)$",
-      "arg_types": ["app"],
-      "generate_message": false
+      "type": "function",
+      "function": {
+        "name": "open_app",
+        "description": "Open a specific application",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "app_name": {
+              "type": "string",
+              "description": "Name of the application to open"
+            }
+          },
+          "required": ["app_name"]
+        }
+      }
     },
     {
-      "action": "WebSearch",
-      "description": "Search a topic on the internet",
-      "patterns": ["search {}"],
-      "regex": "^search\\s+(.+)$",
-      "arg_types": ["query"],
-      "generate_message": true
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web for information",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query"
+            }
+          },
+          "required": ["query"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "City name or 'current' for user location"
+            }
+          },
+          "required": []
+        }
+      }
     }
   ]
 }

@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, Ordering},
 };
 
 use num_traits::FromPrimitive;
@@ -9,22 +9,23 @@ use tokio::{sync::broadcast, task::JoinHandle};
 
 use crate::{
     ActiveGuard, State,
-    actions::{Action, ActionResult, handle_action},
     audio::{
-        Packet, stt::stt_service::STTService, tts::TTSService, utils::resample_to_16khz,
-        voice::SpeakerID,
+        Packet,
+        stt::stt_service::STTService,
+        tts::{TTSService, run_self_calibration},
+        utils::resample_to_16khz,
     },
-    commands::CommandMatcher,
+    commands::CommandConfig,
     config::Config,
     llm::LLMEngine,
-    memory::{MemoryManager, MemoryType},
+    memory::{MemoryManager},
     state::SharedContext,
 };
 
 pub struct WorkerContext {
     pub stt: STTService,
     pub tts: TTSService,
-    pub command_matcher: CommandMatcher,
+    pub command_config: CommandConfig,
     pub llm_engine: LLMEngine,
     pub config: Config,
     pub sample_rate: usize,
@@ -63,86 +64,100 @@ async fn process_speech_logic(
     if current_state == State::Active {
         State::broadcast(State::Processing, &ctx.global_ctx.engine_state, &tx);
 
-        let action = ctx.command_matcher.match_command(&trimmed);
+        // let action = ctx.command_matcher.match_command(&trimmed);
 
-        println!("action: {:?}", action);
+        // println!("action: {:?}", action);
 
-        if action != Action::Unknown {
-            let _guard = ActiveGuard::new(
-                assistant_active.clone(),
-                Arc::clone(&ctx.global_ctx.engine_state),
-                tx.clone(),
-            );
-            let _ = handle_action(action, &ctx.tts, ctx.global_ctx.clone(), &tx, None);
-        } else {
-            let _guard = ActiveGuard::new(
-                assistant_active.clone(),
-                Arc::clone(&ctx.global_ctx.engine_state),
-                tx.clone(),
-            );
+        let _guard = ActiveGuard::new(
+            assistant_active.clone(),
+            Arc::clone(&ctx.global_ctx.engine_state),
+            tx.clone(),
+        );
 
-            let (core_identity, relevant_memories) = {
-                let memory_guard = ctx.memory.lock().await;
+        let (core_identity, relevant_memories) = {
+            let memory_guard = ctx.memory.lock().await;
 
-                let core = if ctx.llm_engine.needs_identity_refresh {
-                    memory_guard.get_core_identity().unwrap_or_default()
-                } else {
-                    vec![]
-                };
-
-                let relevant = memory_guard
-                    .get_relevant_memories(&trimmed)
-                    .unwrap_or_default();
-
-                (core, relevant)
+            let core = if ctx.llm_engine.needs_identity_refresh {
+                memory_guard.get_core_identity().unwrap_or_default()
+            } else {
+                vec![]
             };
 
-            match ctx
-                .llm_engine
-                .generate(&trimmed, &ctx.global_ctx, core_identity, relevant_memories)
-                .await
-            {
-                Ok(response) => {
-                    let action: Action = serde_json::from_value(serde_json::json!({
-                        "action": response.action,
-                        "params": response.params
-                    }))
-                    .unwrap_or(Action::Unknown);
+            let relevant = memory_guard
+                .get_relevant_memories(&trimmed)
+                .unwrap_or_default();
 
-                    println!("action: {:?}", action);
+            (core, relevant)
+        };
 
-                    let mut final_message = response.message.clone();
+        let tools = ctx.command_config.tools.clone();
 
-                    if action != Action::Unknown {
-                        let template = Some(response.message.clone());
-                        if let Ok(ActionResult::Message(msg)) = action.execute(template) {
-                            final_message = msg;
-                        }
-                    }
-
-                    if !final_message.is_empty() {
-                        if let Err(e) = ctx.tts.speak(&final_message, ctx.global_ctx.clone(), &tx, None) {
-                            eprintln!("failed to generate speech: {e}");
-                        }
-                    }
-
-                    if let Some(new_memory) = response.save_to_memory {
-                        let lock = ctx.memory.lock().await;
-
-                        let memory_type = new_memory.memory_type;
-
-                        if let MemoryType::Identity = memory_type {
-                            ctx.llm_engine.mark_identity_dirty();
-                        }
-
-                        if let Err(e) = lock.save(&new_memory.key, &new_memory.value, memory_type) {
-                            eprintln!("Save error: {e}");
-                        }
-                    }
-                }
-                Err(e) => eprintln!("Failed to generate: {e}"),
+        match ctx
+            .llm_engine
+            .generate(
+                &trimmed,
+                &ctx.global_ctx,
+                core_identity,
+                relevant_memories,
+                tools,
+            )
+            .await
+        {
+            Ok(response) => {
+                ctx.tts
+                    .speak(&response, ctx.global_ctx.clone(), &tx, None, false);
             }
+            Err(e) => eprintln!("Failed to generate: {e}"),
         }
+
+        // match ctx
+        //     .llm_engine
+        //     .generate(&trimmed, &ctx.global_ctx, core_identity, relevant_memories, tools)
+        //     .await
+        // {
+        //     Ok(response) => {
+        //         let action: Action = serde_json::from_value(serde_json::json!({
+        //             "action": response.action,
+        //             "params": response.params
+        //         }))
+        //         .unwrap_or(Action::Unknown);
+
+        //         println!("action: {:?}", action);
+
+        //         let mut final_message = response.message.clone();
+
+        //         if action != Action::Unknown {
+        //             let template = Some(response.message.clone());
+        //             if let Ok(ActionResult::Message(msg)) = action.execute(template) {
+        //                 final_message = msg;
+        //             }
+        //         }
+
+        //         if !final_message.is_empty() {
+        //             if let Err(e) =
+        //                 ctx.tts
+        //                     .speak(&final_message, ctx.global_ctx.clone(), &tx, None, false)
+        //             {
+        //                 eprintln!("failed to generate speech: {e}");
+        //             }
+        //         }
+
+        //         if let Some(new_memory) = response.save_to_memory {
+        //             let lock = ctx.memory.lock().await;
+
+        //             let memory_type = new_memory.memory_type;
+
+        //             if let MemoryType::Identity = memory_type {
+        //                 ctx.llm_engine.mark_identity_dirty();
+        //             }
+
+        //             if let Err(e) = lock.save(&new_memory.key, &new_memory.value, memory_type) {
+        //                 eprintln!("Save error: {e}");
+        //             }
+        //         }
+        //     }
+        //     Err(e) => eprintln!("Failed to generate: {e}"),
+        // }
     }
 }
 
@@ -151,14 +166,18 @@ pub async fn handle_enrollment(
     data: Vec<f32>,
     ctx: &mut WorkerContext,
     tx: &broadcast::Sender<Packet>,
-    assistant_active: &Arc<AtomicBool>,
 ) {
     let enrollment_scripts = [
         "The quick brown fox jumps over the lazy dog, but the rainy weather in Paris might slow him down today.",
-        "My voice is my unique password, and it grants me secure access to this system.",
-        "Hey Joe, set a timer for fifteen minutes and remind me to check the oven.",
-        "I'm currently integrating several different modules into this Rust project to make everything run as efficiently as possible.",
-        "Confirm authorization. Everything looks good, let's get started.",
+        "My voice is my unique password, and it grants me secure access to this system whenever I need it.",
+        "Hey assistant, set a timer for fifteen minutes and remind me to check the oven before it burns.",
+        "I'm currently integrating several different modules into this Rust project to make everything run smoothly and efficiently.",
+        "Confirm authorization now. Everything looks good on my end, so let's get started with the process.",
+        "Beautiful azure skies stretched endlessly above the mountainous terrain, while golden sunlight filtered through scattered clouds.",
+        "Technology evolves rapidly, but human creativity and intuition remain irreplaceable in solving complex problems.",
+        "Please schedule a meeting for Thursday afternoon and send the presentation files to everyone on the team.",
+        "The experimental prototype exceeded expectations during testing, demonstrating both reliability and exceptional performance metrics.",
+        "Listening carefully to diverse perspectives helps us understand nuanced situations and make better informed decisions together.",
     ];
 
     let step = ctx
@@ -187,50 +206,71 @@ pub async fn handle_enrollment(
 
     let similarity_threshold = 0.80;
 
-    println!("enrolment similarity score: {:.2}%", similarity * 100.0);
-
     let resampled_data = resample_to_16khz(&data, ctx.sample_rate);
 
     if similarity > similarity_threshold {
         let mut speaker = ctx.global_ctx.speaker.write();
-        
+
         match speaker.add_enrollment_sample(&resampled_data) {
             Ok(is_complete) => {
                 if is_complete {
                     let _ = ctx.tts.speak(
-                        "Voice profile saved successfully.",
+                        "Voice profile saved successfully. Now, please stay quiet while I calibrate my own voice.",
                         ctx.global_ctx.clone(),
                         tx,
-                        None
+                        None,
+                        false
                     );
-                    State::broadcast(State::Idle, &ctx.global_ctx.engine_state, tx);
+
+                    let cal_ctx = ctx.global_ctx.clone();
+                    let cal_tts = ctx.tts.clone();
+                    let cal_tx = tx.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = run_self_calibration(cal_ctx, &cal_tts, &cal_tx).await {
+                            eprintln!("Calibration error {e}");
+                        }
+                    });
                 } else {
                     let next_step = step + 1;
                     if let Some(next_script) = enrollment_scripts.get(next_step) {
                         let next_msg = format!("Got it! Next, please say");
                         println!("{}", next_script);
-                        let _ = ctx.tts.speak(&next_msg, ctx.global_ctx.clone(), tx, Some(State::Enrolling));
+                        let _ = ctx.tts.speak(
+                            &next_msg,
+                            ctx.global_ctx.clone(),
+                            tx,
+                            Some(State::Enrolling),
+                            false,
+                        );
                         State::broadcast(State::Enrolling, &ctx.global_ctx.engine_state, tx);
                     }
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 let _ = ctx.tts.speak(
                     "Audio quality was too low. Please try again.",
                     ctx.global_ctx.clone(),
                     tx,
-                    Some(State::Enrolling)
+                    Some(State::Enrolling),
+                    false,
                 );
                 State::broadcast(State::Enrolling, &ctx.global_ctx.engine_state, tx);
             }
         }
     } else {
         if transcription.len() > 3 {
-            let retry_msg = format!(
-                "I didn't catch that quite right. Please repeat: {}",
-                target_script
+            let retry_msg = format!("I didn't catch that quite right. Please repeat:");
+            let _ = ctx.tts.speak(
+                &retry_msg,
+                ctx.global_ctx.clone(),
+                tx,
+                Some(State::Enrolling),
+                false,
             );
-            let _ = ctx.tts.speak(&retry_msg, ctx.global_ctx.clone(), tx, Some(State::Enrolling));
+
+            println!("{}", retry_msg);
+
             State::broadcast(State::Enrolling, &ctx.global_ctx.engine_state, tx);
         }
     }
@@ -261,16 +301,21 @@ pub fn spawn_transcription_worker(
                         let current_state = ctx.global_ctx.engine_state.load(Ordering::SeqCst);
 
                         println!("current state: {}", current_state);
-                        
+
+                        if current_state == State::Calibrating as u8 {
+                            let resampled = resample_to_16khz(&data, ctx.sample_rate);
+
+                            let mut speaker = ctx.global_ctx.speaker.write();
+                            if let Err(e) = speaker.add_negative_sample(&resampled) {
+                                eprintln!("Failed to add negative sample: {e}");
+                            }
+
+                            let _ = speaker.save_profile();
+                            continue;
+                        }
+
                         if current_state == State::Enrolling as u8 {
-                            handle_enrollment(
-                                transcription,
-                                data,
-                                &mut ctx,
-                                &tx,
-                                &assistant_active,
-                            )
-                            .await;
+                            handle_enrollment(transcription, data, &mut ctx, &tx).await;
                             continue;
                         }
 
@@ -287,7 +332,9 @@ pub fn spawn_transcription_worker(
 
                             let is_verified = {
                                 let mut handle = ctx.global_ctx.speaker.write();
-                                handle.verify(&data, ctx.sample_rate).unwrap_or(false)
+                                handle
+                                    .verify_with_negative_check(&data, ctx.sample_rate)
+                                    .unwrap_or(false)
                             };
 
                             if !is_verified {
@@ -304,7 +351,9 @@ pub fn spawn_transcription_worker(
                         if current_state == State::Active as u8 {
                             let is_verified = {
                                 let mut handle = ctx.global_ctx.speaker.write();
-                                handle.verify(&data, ctx.sample_rate).unwrap_or(false)
+                                handle
+                                    .verify_with_negative_check(&data, ctx.sample_rate)
+                                    .unwrap_or(false)
                             };
 
                             if !is_verified {
@@ -323,15 +372,10 @@ pub fn spawn_transcription_worker(
 
                         let has_wake_word = transcription.contains(&ctx.config.name);
 
-                        if has_wake_word {
-                            let is_verified = {
-                                let mut handle = ctx.global_ctx.speaker.write();
-                                handle.verify(&data, ctx.sample_rate).unwrap_or(false)
-                            };
+                        println!("has wake word: {}", has_wake_word);
 
-                            if is_verified {
-                                State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
-                            }
+                        if has_wake_word {
+                            State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
                         }
                     }
                 }

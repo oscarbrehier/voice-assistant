@@ -95,7 +95,7 @@ impl STTService {
 
         timeout(Duration::from_secs(5), self.process.wait())
             .await
-            .context("Timeout waiting for STT service shutdown")
+            .context("Timeout waiting for STT service shutdown")?
             .context("Failed to wait for process")?;
 
         Ok(())

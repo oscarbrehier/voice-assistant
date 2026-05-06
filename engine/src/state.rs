@@ -1,4 +1,5 @@
-use std::sync::{Arc, RwLock, atomic::{AtomicBool, AtomicU8}};
+use std::sync::{Arc, atomic::{AtomicU8}};
+use parking_lot::RwLock;
 
 use serde::Serialize;
 
@@ -14,16 +15,16 @@ pub struct Vitals {
 }
 
 pub struct GlobalContext {
-    pub telemetry: Arc<RwLock<Vitals>>,
-    pub audio_player: Arc<RwLock<Option<rodio::Player>>>,
+    pub telemetry: RwLock<Vitals>,
+    pub audio_player: RwLock<Option<rodio::Player>>,
     pub engine_state: Arc<AtomicU8>,
-    pub speaker: Arc<parking_lot::RwLock<SpeakerID>>
+    pub speaker: RwLock<SpeakerID>
 }
 
 impl GlobalContext {
     pub fn get_vitals_snapshot(&self) -> String {
 
-        let data = self.telemetry.read().unwrap_or_else(|e| e.into_inner());
+        let data = self.telemetry.read();
         
         format!(
             "CPU: {}% ({}°C) | RAM: {:.1}/{:.1}GB",

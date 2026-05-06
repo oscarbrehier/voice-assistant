@@ -1,0 +1,52 @@
+{
+  "static_commands": [
+    {
+      "action": "PlayMusic",
+      "description": "Play/Pause the currently playing media",
+      "triggers": ["play music", "play song", "start song", "pause music"],
+      "generate_message": false
+    },
+    {
+      "action": "NextTrack",
+      "description": "Skip to next track",
+      "triggers": ["play next track", "skip the current song"],
+      "generate_message": false
+    },
+    {
+      "action": "PreviousTrack",
+      "description": "Go back to the previous track",
+      "triggers": ["play the previous track"],
+      "generate_message": false
+    },
+    {
+      "action": "GetTime",
+      "description": "Get the local time",
+      "triggers": ["what time is it", "give me the time"],
+      "generate_message": false
+    },
+    {
+      "action": "GetSystemStats",
+      "description": "Retrieve real-time system vitals: CPU usage/temp, RAM usage, and Disk health",
+      "triggers": ["vitals", "status", "how are we doing"],
+      "generate_message": true
+    }
+  ],
+  "dynamic_commands": [
+    {
+      "action": "OpenApp",
+      "description": "Open a specific app",
+      "patterns": ["open {}", "launch {}", "start {}"],
+      "regex": "^(?:open|launch|start)\\s+(\\w+)$",
+      "arg_types": ["app"],
+      "generate_message": false
+    },
+    {
+      "action": "WebSearch",
+      "description": "Search a topic on the internet",
+      "patterns": ["search {}"],
+      "regex": "^search\\s+(.+)$",
+      "arg_types": ["query"],
+      "generate_message": true
+    }
+  ]
+}

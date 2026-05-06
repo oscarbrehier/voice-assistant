@@ -1,19 +1,19 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, fs, path::Path};
 
+use anyhow::Ok;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    Opt,
+    actions::datetime::get_time,
     commands::CommandConfig,
     config::Config,
-    llm::{history::ConversationHistory, mistral::call_mistral_with_history},
-    memory::{MemoryManager, MemoryType}, state::SharedContext,
+    llm::{
+        history::ConversationHistory,
+        mistral::{call_mistral_with_history, call_mistral_with_tools},
+    },
+    memory::{MemoryManager, MemoryType},
+    state::SharedContext,
 };
 
 pub mod history;
@@ -37,7 +37,6 @@ pub struct LLMResponse {
 }
 
 pub struct LLMEngine {
-    last_updated: u64,
     history: ConversationHistory,
     system_prompt_template: String,
     core_identity_cache: String,
@@ -54,19 +53,13 @@ impl LLMEngine {
         let system_prompt_template = generate_system_prompt(prompt_path, config, commands)
             .expect("Failed to generate system prompt");
 
-        let last_updated = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
         let history = ConversationHistory::new();
 
         let core_identity_cache = memory.get_core_identity()?.join("\n");
 
-		println!("CORE IDENTITY CACHE (NEW): {}", core_identity_cache);
-		
+        println!("CORE IDENTITY CACHE (NEW): {}", core_identity_cache);
+
         Ok(Self {
-			last_updated,
             history,
             system_prompt_template,
             core_identity_cache,
@@ -80,15 +73,14 @@ impl LLMEngine {
         text: &str,
         global_ctx: &SharedContext,
         core_identity: Vec<String>,
-		relevant_memories: Vec<String>
-    ) -> anyhow::Result<LLMResponse> {
+        relevant_memories: Vec<String>,
+        tools: Vec<Tool>,
+    ) -> anyhow::Result<String> {
         if !core_identity.is_empty() {
             self.core_identity_cache = core_identity.join("\n");
-			self.needs_identity_refresh = false;
+            self.needs_identity_refresh = false;
         }
 
-		println!("CORE IDENTITY CACHE (GENERATE): {}", self.core_identity_cache);
-		
         let situational_str = if relevant_memories.is_empty() {
             "No specific situational memories found for this query.".to_string()
         } else {
@@ -103,26 +95,87 @@ impl LLMEngine {
             .replace("{{core_identity}}", &self.core_identity_cache)
             .replace("{{retrieved_memories}}", &situational_str);
 
-		println!("{final_system_prompt}");
-
         self.history.add_user_input(text);
 
-        for message in &self.history.messages {
-            println!("{} - {}\n\n", message.role, message.content);
+        let max_iterations = 5;
+
+        println!("text: {}", text);
+        
+        for iteration in 0..max_iterations {
+            let response = call_mistral_with_tools(
+                final_system_prompt.clone(),
+                &mut self.history.messages,
+                tools.clone(),
+            )
+            .await?;
+
+            println!("response: {:?}", response);
+
+            let choice = &response.choices[0];
+
+            match choice.finish_reason.as_str() {
+                "stop" => {
+                    let content = choice
+                        .message
+                        .content
+                        .clone()
+                        .unwrap_or_else(|| "I'm not sure how to response".to_string());
+
+                    self.history
+                        .add_assistant_response(Some(content.clone()), None);
+                    return Ok(content);
+                }
+                "tool_calls" => {
+                    let tool_calls = choice
+                        .message
+                        .tool_calls
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("No tool calls in response"))?;
+
+                    self.history.add_assistant_response(
+                        choice.message.content.clone(),
+                        Some(tool_calls.clone()),
+                    );
+
+                    for tool_call in tool_calls {
+                        let result = self.execute_tool(tool_call, global_ctx).await?;
+
+                        self.history.add_tool_result(
+                            tool_call.id.clone(),
+                            tool_call.function.name.clone(),
+                            result,
+                        );
+                    }
+                }
+                other => {
+                    anyhow::bail!("Unexpected finish reason: {}", other);
+                }
+            }
         }
 
-        let (response, raw_json) =
-            call_mistral_with_history(final_system_prompt, &mut self.history, relevant_memories)
-                .await?;
-
-        self.history.add_assistant_response(&raw_json);
-
-        Ok(response)
+        Err(anyhow::anyhow!("Max iterations reached"))
     }
 
-	pub fn mark_identity_dirty(&mut self) {
-		self.needs_identity_refresh = true;
-	}
+    async fn execute_tool(
+        &self,
+        tool_call: &ToolCall,
+        global_ctx: &SharedContext,
+    ) -> anyhow::Result<String> {
+        let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
+
+        match tool_call.function.name.as_str() {
+            "get_time" => {
+                use chrono::Local;
+                let now = Local::now();
+                Ok(now.format("%I:%M %p").to_string())
+            }
+            _ => Err(anyhow::anyhow!("Unknow tool: {}", tool_call.function.name)),
+        }
+    }
+
+    pub fn mark_identity_dirty(&mut self) {
+        self.needs_identity_refresh = true;
+    }
 }
 
 fn generate_system_prompt<P: AsRef<Path>>(
@@ -130,31 +183,108 @@ fn generate_system_prompt<P: AsRef<Path>>(
     config: &Config,
     commands: &CommandConfig,
 ) -> anyhow::Result<String> {
-    let mut commands_str = String::new();
-    let system_prompt =
-        fs::read_to_string(prompt_path).expect("System prompt template file not found in config");
+    // let mut commands_str = String::new();
+    // let system_prompt =
+    //     fs::read_to_string(prompt_path).expect("System prompt template file not found in config");
 
-    for command in &commands.static_commands {
-        commands_str.push_str(&format!("- {}: {}\n", command.action, command.description));
-    }
+    // for command in &commands.static_commands {
+    //     commands_str.push_str(&format!("- {}: {}\n", command.action, command.description));
+    // }
 
-    for command in &commands.dynamic_commands {
-        let param_placeholder = command
-            .arg_types
-            .iter()
-            .map(|arg| format!("{{{}}}", arg))
-            .collect::<Vec<_>>()
-            .join(" ");
+    // for command in &commands.dynamic_commands {
+    //     let param_placeholder = command
+    //         .arg_types
+    //         .iter()
+    //         .map(|arg| format!("{{{}}}", arg))
+    //         .collect::<Vec<_>>()
+    //         .join(" ");
 
-        commands_str.push_str(&format!(
-            "- {} {}: {}\n",
-            command.action, param_placeholder, command.description
-        ));
-    }
+    //     commands_str.push_str(&format!(
+    //         "- {} {}: {}\n",
+    //         command.action, param_placeholder, command.description
+    //     ));
+    // }
 
-    let system_prompt = system_prompt
-        .replace("{{name}}", &config.name)
-        .replace("{{actions}}", &commands_str);
+    // let system_prompt = system_prompt
+    //     .replace("{{name}}", &config.name)
+    //     .replace("{{actions}}", &commands_str);
 
-    Ok(system_prompt)
+    Ok("system_prompt".to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: FunctionDefinition,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "role")]
+pub enum Message {
+    #[serde(rename = "user")]
+    User { content: String },
+
+    #[serde(rename = "assistant")]
+    Assistant {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_calls: Option<Vec<ToolCall>>,
+    },
+
+    #[serde(rename = "tool")]
+    Tool {
+        content: String,
+        tool_call_id: String,
+        name: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: Option<String>,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MistralRequest {
+    pub model: String,
+    pub messages: Vec<Message>,
+    pub tools: Vec<Tool>,
+    pub tool_choice: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct MistralResponse {
+    pub id: String,
+    pub choices: Vec<Choice>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Choice {
+    pub message: ResponseMessage,
+    pub finish_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponseMessage {
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }

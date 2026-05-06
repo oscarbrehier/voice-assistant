@@ -1,17 +1,5 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
-
-use engine::{
-    EnginePaths,
-    actions::obsidian::{
-        VaultConfig, append_to_note, create_note, get_recent_notes, list_vault_index,
-        read_note_content, search_notes, smart_append_to_section,
-    },
-    monitor, start_engine,
-    state::{GlobalContext, SharedContext, Vitals},
-};
+use std::{path::PathBuf};
+use engine::{EnginePaths, start_engine};
 use tokio::signal;
 
 #[tokio::main]
@@ -21,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
         script_dir: PathBuf::from("engine/python"),
     };
 
-    match start_engine(paths, Some(19)).await {
+    match start_engine(paths, Some(17)).await {
         Ok((tx, _stream)) => {
             println!("engile started");
 

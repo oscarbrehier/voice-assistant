@@ -1,31 +1,35 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ort::session::Session;
 
 use mel_spec::fbank::{Fbank, FbankConfig};
-
 use crate::audio::utils::resample_to_16khz;
 
 pub struct EnrolmentState {
     pub current_step: usize,
     pub max_steps: usize,
     pub accumulated_embedding: Vec<Vec<f32>>,
+    pub negative_embeddings: Vec<Vec<f32>>,
 }
 
 impl EnrolmentState {
     pub fn new() -> Self {
         Self {
             current_step: 0,
-            max_steps: 5,
+            max_steps: 10,
             accumulated_embedding: Vec::new(),
+            negative_embeddings: Vec::new(),
         }
     }
 }
 
 pub struct SpeakerID {
     pub session: Session,
+    pub profile_path: Option<PathBuf>,
     pub reference_embedding: Option<Vec<f32>>,
+    pub negative_embeddings: Vec<Vec<f32>>,
     pub similarity_threshold: f32,
+    pub recent_scores: Vec<f32>,
     pub enrolment_state: Option<EnrolmentState>,
 }
 
@@ -46,13 +50,20 @@ impl SpeakerID {
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load model: {}", e))?;
 
-        let embedding = match profile_path {
-            Some(p) if p.as_ref().exists() => {
-                let bytes = std::fs::read(p.as_ref())?;
-                let decoded: Vec<f32> = bincode::deserialize(&bytes)?;
-                Some(decoded)
+        let owned_profile_path = profile_path.as_ref().map(|p| p.as_ref().to_path_buf());
+
+        let (embedding, negative_embeddings) = match &owned_profile_path {
+            Some(p) if p.exists() => {
+                let bytes = std::fs::read(p)?;
+
+                if let Ok((pos, neg)) = bincode::deserialize::<(Vec<f32>, Vec<Vec<f32>>)>(&bytes) {
+                    (Some(pos), neg)
+                } else {
+                    let decoded: Vec<f32> = bincode::deserialize(&bytes)?;
+                    (Some(decoded), Vec::new())
+                }
             }
-            _ => None,
+            _ => (None, Vec::new()),
         };
 
         let enrolment_state = if embedding.is_some() {
@@ -63,14 +74,52 @@ impl SpeakerID {
 
         Ok(Self {
             session,
+            profile_path: owned_profile_path,
             reference_embedding: embedding,
+            negative_embeddings,
             similarity_threshold: threshold,
+            recent_scores: Vec::new(),
             enrolment_state,
         })
     }
 
+    pub fn save_profile(&self) -> anyhow::Result<()> {
+        let path = self.profile_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No profile path configured for this speaker"))?;
+
+        let reference = self
+            .reference_embedding
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No reference embedding to save"))?;
+
+        let data_to_save = (reference.clone(), self.negative_embeddings.clone());
+
+        let encoded = bincode::serialize(&data_to_save)?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        std::fs::write(path, encoded)?;
+
+        Ok(())
+    }
+
     pub fn is_enrolled(&self) -> bool {
         self.reference_embedding.is_some()
+    }
+
+    pub fn get_adaptive_threshold(&self) -> f32 {
+        if self.recent_scores.len() < 10 {
+            return self.similarity_threshold;
+        }
+
+        let mut sorted = self.recent_scores.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let percentile_85 = sorted[(sorted.len() as f32 * 0.85) as usize];
+
+        percentile_85.max(self.similarity_threshold)
     }
 
     pub fn add_enrollment_sample(&mut self, audio_samples: &[f32]) -> anyhow::Result<bool> {
@@ -94,6 +143,18 @@ impl SpeakerID {
         }
 
         Ok(false)
+    }
+
+    pub fn add_negative_sample(&mut self, audio_samples: &[f32]) -> anyhow::Result<()> {
+        let embedding = self.extract_embedding(audio_samples)?;
+
+        if let Some(state) = &mut self.enrolment_state {
+            state.negative_embeddings.push(embedding.clone());
+        }
+
+        self.negative_embeddings.push(embedding);
+
+        Ok(())
     }
 
     fn finalize_enrolment(&mut self) -> anyhow::Result<()> {
@@ -120,10 +181,18 @@ impl SpeakerID {
 
         self.reference_embedding = Some(normalized.clone());
 
-        let encoded = bincode::serialize(&normalized)?;
+        self.negative_embeddings = state.negative_embeddings;
 
-        std::fs::create_dir_all("voices")?;
-        std::fs::write("voices/voice_1.bin", encoded)?;
+        let data_to_save = (normalized, self.negative_embeddings.clone());
+        let encoded = bincode::serialize(&data_to_save)?;
+
+        let path = Path::new("profiles/profile_1.bin");
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+            
+        std::fs::write(path, encoded)?;
 
         Ok(())
     }
@@ -147,30 +216,85 @@ impl SpeakerID {
         Ok(similarity >= self.similarity_threshold)
     }
 
-    fn extract_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<f32>> {
-        let config = FbankConfig::default();
-        let fbank = Fbank::new(config);
+    pub fn verify_with_negative_check(
+        &mut self,
+        candidate_samples: &[f32],
+        sample_rate: usize,
+    ) -> anyhow::Result<bool> {
+        let resampled_data = resample_to_16khz(candidate_samples, sample_rate);
 
+        let reference = self
+            .reference_embedding
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("SpeakerID has no enrolled reference"))?;
+
+        let candidate = self.extract_embedding(&resampled_data)?;
+
+        let positive_sim = self.cosine_similarity(&reference, &candidate);
+
+        let negative_sim = if !self.negative_embeddings.is_empty() {
+            let sum: f32 = self.negative_embeddings
+                .iter()
+                .map(|neg_emb| self.cosine_similarity(neg_emb, &candidate))
+                .sum();
+
+            sum / self.negative_embeddings.len() as f32
+        } else {
+            0.0
+        };
+
+        let margin = 0.20;
+        let threshold = self.get_adaptive_threshold();
+
+        let is_positive_enough = positive_sim >= threshold;
+        let is_distinctive_from_else = (positive_sim - negative_sim) >= margin;
+
+        let decision = is_positive_enough && is_distinctive_from_else;
+
+        self.recent_scores.push(positive_sim);
+        if self.recent_scores.len() > 100 {
+            self.recent_scores.remove(0);
+        }
+
+        Ok(decision)
+    }
+
+    fn extract_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<f32>> {
+        let config = FbankConfig {
+            num_mel_bins: 80,
+            sample_rate: 16000.0,
+            frame_length_ms: 25.0,
+            frame_shift_ms: 10.0,
+            ..FbankConfig::default()
+        };
+        let fbank = Fbank::new(config);
         let features = fbank.compute(samples);
+
         let (t_dim, mel_dim) = (features.nrows(), features.ncols());
 
-        let raw_data = features
-            .as_slice()
-            .map(|s| s.to_vec())
-            .ok_or_else(|| anyhow::anyhow!("Could not flatten features"))?;
+        let mut standardized_data = Vec::with_capacity(t_dim * mel_dim);
 
-        let array_3d = ndarray::Array3::from_shape_vec((1, t_dim, mel_dim), raw_data)?;
+        for t in 0..t_dim {
+            for m in 0..mel_dim {
+                standardized_data.push(features[(t, m)]);
+            }
+        }
 
+        let array_3d = ndarray::Array3::from_shape_vec((1, t_dim, mel_dim), standardized_data)?;
         let input_tensor = ort::value::Value::from_array(array_3d)?;
-        let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
 
+        let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
         let output_value = outputs
             .get("embs")
-            .ok_or_else(|| anyhow::anyhow!("Output 'embs' not found"))?;
-
+            .ok_or_else(|| anyhow::anyhow!("No embs"))?;
         let (_, extracted_slice) = output_value.try_extract_tensor::<f32>()?;
 
-        Ok(extracted_slice.to_vec())
+        let mut emb = extracted_slice.to_vec();
+        let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+        emb.iter_mut().for_each(|x| *x /= norm);
+
+        Ok(emb)
     }
 
     fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {

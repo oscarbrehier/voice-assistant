@@ -1,5 +1,3 @@
-use std::sync::{Arc, atomic::AtomicU8};
-
 use anyhow::Ok;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -73,7 +71,7 @@ pub fn handle_action(
     match action.execute(template)? {
         ActionResult::Success => Ok(()),
         ActionResult::Message(msg) => {
-            tts.speak(&msg, ctx, sender, None)?;
+            tts.speak(&msg, ctx, sender, None, false)?;
             Ok(())
         }
     }

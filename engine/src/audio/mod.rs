@@ -10,6 +10,7 @@ pub mod stt;
 pub mod tts;
 pub mod utils;
 pub mod voice;
+pub mod onboarding;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", content = "content")]
