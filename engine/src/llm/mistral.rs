@@ -1,7 +1,9 @@
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::llm::{LLMResponse, Message, MistralRequest, MistralResponse, Tool, history::ConversationHistory};
+use crate::llm::{
+    LLMResponse, Message, MistralRequest, MistralResponse, Tool, history::ConversationHistory,
+};
 
 pub async fn call_mistral_with_history(
     system_prompt: String,
@@ -68,18 +70,23 @@ pub async fn call_mistral_with_tools(
     messages: &[Message],
     tools: Vec<Tool>,
 ) -> anyhow::Result<MistralResponse> {
-
     let client = Client::new();
 
-    let mut full_messages = vec![Message::User { content: system_prompt }];
+    let mut full_messages = vec![Message::User {
+        content: system_prompt,
+    }];
     full_messages.extend_from_slice(messages);
 
     let request = MistralRequest {
         model: "ministral-8b-latest".to_string(),
         messages: full_messages,
         tools,
-        tool_choice: "auto".to_string()
+        tool_choice: "auto".to_string(),
+        web_search: None,
     };
+
+    println!("\n📤 REQUEST TO MISTRAL:\n");
+    println!("{}", serde_json::to_string_pretty(&request)?);
 
     let mistral_api_key: String =
         std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY key not found");
@@ -97,10 +104,7 @@ pub async fn call_mistral_with_tools(
         anyhow::bail!("Mistral API error: {}", error_text);
     }
 
-    let raw_body = response.text().await?;
-    println!("raw response: {}", raw_body);
-
-    let result: MistralResponse = serde_json::from_str(&raw_body)?;
+    let result: MistralResponse = response.json().await?;
 
     Ok(result)
 }

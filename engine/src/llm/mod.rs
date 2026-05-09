@@ -50,8 +50,10 @@ impl LLMEngine {
         commands: &CommandConfig,
         memory: &MemoryManager,
     ) -> anyhow::Result<Self> {
-        let system_prompt_template = generate_system_prompt(prompt_path, config, commands)
-            .expect("Failed to generate system prompt");
+        let system_prompt_template = fs::read_to_string(prompt_path)
+            .expect("System prompt template file not found in config");
+        // let system_prompt_template = generate_system_prompt(prompt_path, config, commands)
+        //     .expect("Failed to generate system prompt");
 
         let history = ConversationHistory::new();
 
@@ -100,7 +102,7 @@ impl LLMEngine {
         let max_iterations = 5;
 
         println!("text: {}", text);
-        
+
         for iteration in 0..max_iterations {
             let response = call_mistral_with_tools(
                 final_system_prompt.clone(),
@@ -178,39 +180,39 @@ impl LLMEngine {
     }
 }
 
-fn generate_system_prompt<P: AsRef<Path>>(
-    prompt_path: P,
-    config: &Config,
-    commands: &CommandConfig,
-) -> anyhow::Result<String> {
-    // let mut commands_str = String::new();
-    // let system_prompt =
-    //     fs::read_to_string(prompt_path).expect("System prompt template file not found in config");
+// fn generate_system_prompt<P: AsRef<Path>>(
+//     prompt_path: P,
+//     config: &Config,
+//     commands: &CommandConfig,
+// ) -> anyhow::Result<String> {
+//     let mut commands_str = String::new();
+//     let system_prompt =
+//         fs::read_to_string(prompt_path).expect("System prompt template file not found in config");
 
-    // for command in &commands.static_commands {
-    //     commands_str.push_str(&format!("- {}: {}\n", command.action, command.description));
-    // }
+//     for command in &commands.static_commands {
+//         commands_str.push_str(&format!("- {}: {}\n", command.action, command.description));
+//     }
 
-    // for command in &commands.dynamic_commands {
-    //     let param_placeholder = command
-    //         .arg_types
-    //         .iter()
-    //         .map(|arg| format!("{{{}}}", arg))
-    //         .collect::<Vec<_>>()
-    //         .join(" ");
+//     for command in &commands.dynamic_commands {
+//         let param_placeholder = command
+//             .arg_types
+//             .iter()
+//             .map(|arg| format!("{{{}}}", arg))
+//             .collect::<Vec<_>>()
+//             .join(" ");
 
-    //     commands_str.push_str(&format!(
-    //         "- {} {}: {}\n",
-    //         command.action, param_placeholder, command.description
-    //     ));
-    // }
+//         commands_str.push_str(&format!(
+//             "- {} {}: {}\n",
+//             command.action, param_placeholder, command.description
+//         ));
+//     }
 
-    // let system_prompt = system_prompt
-    //     .replace("{{name}}", &config.name)
-    //     .replace("{{actions}}", &commands_str);
+//     let system_prompt = system_prompt
+//         .replace("{{name}}", &config.name)
+//         .replace("{{actions}}", &commands_str);
 
-    Ok("system_prompt".to_string())
-}
+//     Ok(system_prompt)
+// }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tool {
@@ -268,6 +270,9 @@ pub struct MistralRequest {
     pub messages: Vec<Message>,
     pub tools: Vec<Tool>,
     pub tool_choice: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
