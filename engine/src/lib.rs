@@ -3,25 +3,29 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
-    }
+    },
 };
 
 use clap::Parser;
 use cpal::Stream;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use parking_lot::{RwLock};
 use serde::Serialize;
 use tokio::sync::broadcast;
-use parking_lot::RwLock;
 
 use crate::{
     audio::{
-        capture::{init_audio_capture, run_vad_loop}, onboarding, setup_audio_device, stt::{
+        capture::{init_audio_capture, run_vad_loop},
+        onboarding, setup_audio_device,
+        stt::{
             stt_service::STTService,
             worker::{WorkerContext, spawn_transcription_worker},
-        }, tts::TTSService, voice::SpeakerID
+        },
+        tts::TTSService,
+        voice::SpeakerID,
     },
-    commands::{CommandConfig},
+    commands::CommandConfig,
     config::Config,
     llm::LLMEngine,
     memory::MemoryManager,
@@ -56,7 +60,7 @@ pub enum State {
     Processing = 3,
     Speaking = 4,
     Enrolling = 5,
-    Calibrating = 6
+    Calibrating = 6,
 }
 
 impl State {
@@ -137,13 +141,20 @@ pub async fn start_engine(
     let sample_rate = stream_config.sample_rate() as usize;
     let channels = stream_config.channels() as usize;
 
-    let speaker_id = SpeakerID::new("engine/models/voxceleb_ECAPA1024.onnx", Some("profiles/profile_1.bin"), 0.35)?;
+    let speaker_id = SpeakerID::new(
+        "engine/models/voxceleb_ECAPA1024.onnx",
+        Some("profiles/profile_1.bin"),
+        0.35,
+    )?;
+
+    let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
+    let shared_memory = Arc::new(std::sync::Mutex::new(memory));
 
     let shared_context: SharedContext = Arc::new(GlobalContext {
         telemetry: RwLock::new(Vitals::default()),
         audio_player: RwLock::new(None),
         engine_state: Arc::new(AtomicU8::new(State::Idle as u8)),
-        speaker: parking_lot::RwLock::new(speaker_id)
+        speaker: RwLock::new(speaker_id)
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
@@ -156,9 +167,7 @@ pub async fn start_engine(
         monitor::run_monitoring_loop(monitor_state).await;
     });
 
-    let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
-
-    let llm_engine = LLMEngine::new(prompt_path, &config, &command_config.clone(), &memory)?;
+    let llm_engine = LLMEngine::new(prompt_path, Arc::clone(&shared_memory))?;
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
@@ -202,7 +211,7 @@ pub async fn start_engine(
 
     let assistant_active_worker = assistant_active.clone();
 
-    let worker_memory = Arc::new(tokio::sync::Mutex::new(memory));
+    let worker_memory = Arc::clone(&shared_memory);
     let worker_tts = tts.clone();
 
     let worker_context = WorkerContext {
@@ -242,7 +251,9 @@ pub async fn start_engine(
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    if let Err(e) = onboarding::run_startup_verifications(shared_context.clone(), &tts, &tx_internal).await {
+    if let Err(e) =
+        onboarding::run_startup_verifications(shared_context.clone(), &tts, &tx_internal).await
+    {
         eprintln!("Startup verification error: {e}");
     }
 

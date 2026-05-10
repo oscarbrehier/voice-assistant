@@ -68,6 +68,66 @@
     {
       "type": "function",
       "function": {
+        "name": "search_memories",
+        "description": "Search for memories using natural language. ALWAYS use this first when looking for user information. Works even if you don't know the exact key name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "What to search for"
+            }
+          },
+          "required": ["query"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "query_memory",
+        "description": "Get memory by EXACT key name. ONLY use this if you already know the exact key from a previous search_memories result. If unsure, use search_memories instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "description": "Exact memory key"
+            }
+          },
+          "required": ["key"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "save_memory",
+        "description": "Store a new memory or update an existing one",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "description": "Unique identifier for this memory"
+            },
+            "value": {
+              "type": "string",
+              "description": "The information to store"
+            },
+            "memory_type": {
+              "type": "string",
+              "enum": ["identity", "situational"],
+              "description": "Type of memory"
+            }
+          },
+          "required": ["key", "value", "memory_type"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "get_weather",
         "description": "Get current weather for a location",
         "parameters": {

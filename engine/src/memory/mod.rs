@@ -8,7 +8,7 @@ pub struct MemoryManager {
     conn: Connection,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MemoryType {
     Identity,
     Situational
@@ -92,8 +92,20 @@ impl MemoryManager {
         Ok(items)
     }
 
-    pub fn get_relevant_memories(&self, user_input: &str) -> anyhow::Result<Vec<String>> {
-        let clean_query = user_input
+    pub fn get(&self, key: &str) -> anyhow::Result<String> {
+        self.conn.query_row("SELECT value FROM memories WHERE key = ?", 
+            rusqlite::params![key], 
+            |row| row.get(0))
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                anyhow::anyhow!("Key '{}' not found in memories", key)
+            }
+            _ => anyhow::anyhow!(e),
+        })
+    }
+
+    pub fn get_relevant_memories(&self, query: &str, limit: Option<usize>) -> anyhow::Result<Vec<String>> {
+        let clean_query = query
             .split_whitespace()
             .map(|w| {
                 w.chars()
@@ -112,16 +124,53 @@ impl MemoryManager {
             "SELECT key, value FROM memories_fts 
                 WHERE memories_fts MATCH ? 
                 ORDER BY rank 
-                LIMIT 10",
+                LIMIT ?",
         )?;
 
+        let limit = limit.unwrap_or(10) as i64;
+
         let relevant = stmt
-            .query_map([clean_query], |row| {
+            .query_map([clean_query, limit.to_string()], |row| {
                 let key: String = row.get(0)?;
                 let value: String = row.get(1)?;
                 Ok(format!("{}: {}", key, value))
             })?
-            .collect::<Result<Vec<String>, rusqlite::Error>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(relevant)
+    }
+
+    pub fn search(&self, query: &str, limit: Option<usize>) -> anyhow::Result<Vec<(String, String)>> {
+        let clean_query = query
+            .split_whitespace()
+            .map(|w| {
+                w.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect::<String>()
+            })
+            .filter(|w| w.len() > 2)
+            .map(|w| format!("{}*", w))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
+        if clean_query.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT key, value FROM memories_fts 
+                WHERE memories_fts MATCH ? 
+                ORDER BY rank 
+                LIMIT ?",
+        )?;
+
+        let limit = limit.unwrap_or(10) as i64;
+
+        let relevant = stmt
+            .query_map(rusqlite::params![clean_query, limit.to_string()], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(relevant)
     }

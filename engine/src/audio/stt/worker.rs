@@ -29,7 +29,7 @@ pub struct WorkerContext {
     pub llm_engine: LLMEngine,
     pub config: Config,
     pub sample_rate: usize,
-    pub memory: Arc<tokio::sync::Mutex<MemoryManager>>,
+    pub memory: Arc<std::sync::Mutex<MemoryManager>>,
     pub global_ctx: SharedContext,
 }
 
@@ -64,10 +64,6 @@ async fn process_speech_logic(
     if current_state == State::Active {
         State::broadcast(State::Processing, &ctx.global_ctx.engine_state, &tx);
 
-        // let action = ctx.command_matcher.match_command(&trimmed);
-
-        // println!("action: {:?}", action);
-
         let _guard = ActiveGuard::new(
             assistant_active.clone(),
             Arc::clone(&ctx.global_ctx.engine_state),
@@ -75,7 +71,7 @@ async fn process_speech_logic(
         );
 
         let (core_identity, relevant_memories) = {
-            let memory_guard = ctx.memory.lock().await;
+            let memory_guard = ctx.memory.lock().expect("Memory mutex poisoned");
 
             let core = if ctx.llm_engine.needs_identity_refresh {
                 memory_guard.get_core_identity().unwrap_or_default()
@@ -84,7 +80,7 @@ async fn process_speech_logic(
             };
 
             let relevant = memory_guard
-                .get_relevant_memories(&trimmed)
+                .get_relevant_memories(&trimmed, None)
                 .unwrap_or_default();
 
             (core, relevant)
@@ -104,60 +100,10 @@ async fn process_speech_logic(
             .await
         {
             Ok(response) => {
-                ctx.tts
-                    .speak(&response, ctx.global_ctx.clone(), &tx, None, false);
+                let _ = ctx.tts.speak(&response, ctx.global_ctx.clone(), &tx, None, false);
             }
             Err(e) => eprintln!("Failed to generate: {e}"),
         }
-
-        // match ctx
-        //     .llm_engine
-        //     .generate(&trimmed, &ctx.global_ctx, core_identity, relevant_memories, tools)
-        //     .await
-        // {
-        //     Ok(response) => {
-        //         let action: Action = serde_json::from_value(serde_json::json!({
-        //             "action": response.action,
-        //             "params": response.params
-        //         }))
-        //         .unwrap_or(Action::Unknown);
-
-        //         println!("action: {:?}", action);
-
-        //         let mut final_message = response.message.clone();
-
-        //         if action != Action::Unknown {
-        //             let template = Some(response.message.clone());
-        //             if let Ok(ActionResult::Message(msg)) = action.execute(template) {
-        //                 final_message = msg;
-        //             }
-        //         }
-
-        //         if !final_message.is_empty() {
-        //             if let Err(e) =
-        //                 ctx.tts
-        //                     .speak(&final_message, ctx.global_ctx.clone(), &tx, None, false)
-        //             {
-        //                 eprintln!("failed to generate speech: {e}");
-        //             }
-        //         }
-
-        //         if let Some(new_memory) = response.save_to_memory {
-        //             let lock = ctx.memory.lock().await;
-
-        //             let memory_type = new_memory.memory_type;
-
-        //             if let MemoryType::Identity = memory_type {
-        //                 ctx.llm_engine.mark_identity_dirty();
-        //             }
-
-        //             if let Err(e) = lock.save(&new_memory.key, &new_memory.value, memory_type) {
-        //                 eprintln!("Save error: {e}");
-        //             }
-        //         }
-        //     }
-        //     Err(e) => eprintln!("Failed to generate: {e}"),
-        // }
     }
 }
 

@@ -3,7 +3,7 @@ use parking_lot::RwLock;
 
 use serde::Serialize;
 
-use crate::audio::voice::SpeakerID;
+use crate::{audio::voice::SpeakerID, memory::MemoryManager};
 
 #[derive(Default, Serialize, Clone)]
 pub struct Vitals {
@@ -18,7 +18,7 @@ pub struct GlobalContext {
     pub telemetry: RwLock<Vitals>,
     pub audio_player: RwLock<Option<rodio::Player>>,
     pub engine_state: Arc<AtomicU8>,
-    pub speaker: RwLock<SpeakerID>
+    pub speaker: RwLock<SpeakerID>,
 }
 
 impl GlobalContext {
