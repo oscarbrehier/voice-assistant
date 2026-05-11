@@ -1,10 +1,10 @@
 use anyhow::Context;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::time::timeout;
+use tokio::time::{timeout};
 
 pub struct STTService {
     process: Child,
@@ -49,6 +49,10 @@ impl STTService {
             return Ok("".to_string());
         }
 
+        let total_start = Instant::now();
+
+        println!("Starting transcription for {} samples", audio.len());
+
         match self.process.try_wait() {
             Ok(Some(status)) => {
                 anyhow::bail!("STT process exited with status: {}", status);
@@ -86,6 +90,14 @@ impl STTService {
             .context("STT service timeout, got no response within 10s")?
             .context("Failed to read STT output")?;
 
+        let total_time = total_start.elapsed();
+        println!(
+            "Transcription complete: '{}' ({} samples in {:?})",
+            result.trim(),
+            audio.len(),
+            total_time
+        );
+        
         Ok(result.trim().to_string())
     }
 

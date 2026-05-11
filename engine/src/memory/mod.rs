@@ -11,7 +11,7 @@ pub struct MemoryManager {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MemoryType {
     Identity,
-    Situational
+    Situational,
 }
 
 impl MemoryManager {
@@ -29,7 +29,7 @@ impl MemoryManager {
                     value TEXT
                 );
                 CREATE TABLE IF NOT EXISTS memories (
-                    key TEXT PRIMARY KEY, 
+                    key TEXT PRIMARY KEY,
                     value TEXT
                 );
                 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -49,21 +49,26 @@ impl MemoryManager {
             ",
         )?;
 
+        conn.execute(
+            "INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')",
+            [],
+        )?;
+
         Ok(Self { conn })
     }
 
     pub fn save(&self, key: &str, value: &str, memory_type: MemoryType) -> anyhow::Result<()> {
         match memory_type {
             MemoryType::Identity => self.save_identity(key, value)?,
-            MemoryType::Situational => self.save_situational(key, value)?
+            MemoryType::Situational => self.save_situational(key, value)?,
         };
         Ok(())
     }
 
     pub fn save_identity(&self, key: &str, value: &str) -> anyhow::Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO identity (key, value) VALUES (?1, ?2)", 
-            params![key, value]
+            "INSERT OR REPLACE INTO identity (key, value) VALUES (?1, ?2)",
+            params![key, value],
         )?;
 
         Ok(())
@@ -93,18 +98,25 @@ impl MemoryManager {
     }
 
     pub fn get(&self, key: &str) -> anyhow::Result<String> {
-        self.conn.query_row("SELECT value FROM memories WHERE key = ?", 
-            rusqlite::params![key], 
-            |row| row.get(0))
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                anyhow::anyhow!("Key '{}' not found in memories", key)
-            }
-            _ => anyhow::anyhow!(e),
-        })
+        self.conn
+            .query_row(
+                "SELECT value FROM memories WHERE key = ?",
+                rusqlite::params![key],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    anyhow::anyhow!("Key '{}' not found in memories", key)
+                }
+                _ => anyhow::anyhow!(e),
+            })
     }
 
-    pub fn get_relevant_memories(&self, query: &str, limit: Option<usize>) -> anyhow::Result<Vec<String>> {
+    pub fn get_relevant_memories(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<String>> {
         let clean_query = query
             .split_whitespace()
             .map(|w| {
@@ -121,16 +133,16 @@ impl MemoryManager {
         }
 
         let mut stmt = self.conn.prepare(
-            "SELECT key, value FROM memories_fts 
-                WHERE memories_fts MATCH ? 
-                ORDER BY rank 
+            "SELECT key, value FROM memories_fts
+                WHERE memories_fts MATCH ?
+                ORDER BY rank
                 LIMIT ?",
         )?;
 
         let limit = limit.unwrap_or(10) as i64;
 
         let relevant = stmt
-            .query_map([clean_query, limit.to_string()], |row| {
+            .query_map(rusqlite::params![clean_query, limit], |row| {
                 let key: String = row.get(0)?;
                 let value: String = row.get(1)?;
                 Ok(format!("{}: {}", key, value))
@@ -140,7 +152,11 @@ impl MemoryManager {
         Ok(relevant)
     }
 
-    pub fn search(&self, query: &str, limit: Option<usize>) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn search(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<(String, String)>> {
         let clean_query = query
             .split_whitespace()
             .map(|w| {
@@ -149,7 +165,7 @@ impl MemoryManager {
                     .collect::<String>()
             })
             .filter(|w| w.len() > 2)
-            .map(|w| format!("{}*", w))
+            .map(|w| format!("(key:{w}* OR value:{w}*)"))
             .collect::<Vec<_>>()
             .join(" OR ");
 
@@ -158,19 +174,19 @@ impl MemoryManager {
         }
 
         let mut stmt = self.conn.prepare(
-            "SELECT key, value FROM memories_fts 
-                WHERE memories_fts MATCH ? 
-                ORDER BY rank 
+            "SELECT key, value FROM memories_fts
+                WHERE memories_fts MATCH ?
+                ORDER BY rank
                 LIMIT ?",
         )?;
 
         let limit = limit.unwrap_or(10) as i64;
 
         let relevant = stmt
-            .query_map(rusqlite::params![clean_query, limit.to_string()], |row| {
+            .query_map(rusqlite::params![clean_query, limit], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })?
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<(String, String)>, rusqlite::Error>>()?;
 
         Ok(relevant)
     }

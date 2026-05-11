@@ -11,19 +11,19 @@ use crate::{
     ActiveGuard, State,
     audio::{
         Packet,
-        stt::stt_service::STTService,
+        stt::{stt::STT, stt_service::STTService},
         tts::{TTSService, run_self_calibration},
         utils::resample_to_16khz,
     },
     commands::CommandConfig,
     config::Config,
     llm::LLMEngine,
-    memory::{MemoryManager},
+    memory::MemoryManager,
     state::SharedContext,
 };
 
 pub struct WorkerContext {
-    pub stt: STTService,
+    pub stt: STT,
     pub tts: TTSService,
     pub command_config: CommandConfig,
     pub llm_engine: LLMEngine,
@@ -35,7 +35,7 @@ pub struct WorkerContext {
 
 async fn get_transcription(ctx: &mut WorkerContext, data: &[f32]) -> Option<String> {
     let resampled = resample_to_16khz(&data, ctx.sample_rate);
-    match ctx.stt.transcribe(&resampled).await {
+    match ctx.stt.transcribe(&resampled) {
         Ok(data) => {
             let trimmed = data.trim().to_lowercase();
             if trimmed.is_empty() {

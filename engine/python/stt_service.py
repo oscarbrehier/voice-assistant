@@ -100,7 +100,8 @@ class STTService:
 
 if __name__ == "__main__":
     try:
-        service = STTService(model="distil-medium.en", device="cuda")
+        # service = STTService(model="distil-medium.en", device="cuda")
+        service = STTService(model="base.en", device="cuda")
         service.run()
     except Exception as e:
         print(f"error: {e}", file=sys.stderr, flush=True)

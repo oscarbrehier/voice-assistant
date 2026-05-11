@@ -19,8 +19,7 @@ use crate::{
         capture::{init_audio_capture, run_vad_loop},
         onboarding, setup_audio_device,
         stt::{
-            stt_service::STTService,
-            worker::{WorkerContext, spawn_transcription_worker},
+            stt::STT, stt_service::STTService, worker::{WorkerContext, spawn_transcription_worker}
         },
         tts::TTSService,
         voice::SpeakerID,
@@ -157,7 +156,8 @@ pub async fn start_engine(
         speaker: RwLock::new(speaker_id)
     });
 
-    let stt = STTService::new(paths.script_dir.clone()).await?;
+    // let stt = STTService::new(paths.script_dir.clone()).await?;
+    let stt = STT::new("engine/models/ggml-base.bin")?;
     let tts = TTSService::new(paths.script_dir);
 
     let command_config = CommandConfig::from_file(commands_file)?;
