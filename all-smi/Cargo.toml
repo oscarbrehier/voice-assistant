@@ -1,0 +1,144 @@
+[package]
+name = "all-smi"
+version = "0.20.1"
+description = "Command-line utility for monitoring GPU hardware. It provides a real-time view of GPU utilization, memory usage, temperature, power consumption, and other metrics."
+authors = ["Jeongkyu Shin <inureyes@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/lablup/all-smi"
+readme = "README.md"
+keywords = ["cli", "rust"]
+categories = ["command-line-utilities"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1.50.0", features = ["full"] }
+chrono = "0.4.44"
+crossterm = { version = "0.29.0", optional = true }
+clap = { version = "4.6.0", features = ["derive"], optional = true }
+toml = { version = "0.9", optional = true }
+dirs = { version = "6", optional = true }
+axum = { version = "0.8.8", optional = true }
+tower-http = { version = "0.6.8", features = ["cors", "trace"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.13", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+regex = "1.12.2"
+sysinfo = "0.38"
+anyhow = { version = "1.0.100", optional = true }
+hyper = { version = "1.9.0", features = ["full"], optional = true }
+hyper-util = { version = "0.1.18", features = ["full"], optional = true }
+rand = { version = "0.10", optional = true }
+futures-util = "0.3.31"
+nvml-wrapper = "0.12.1"
+once_cell = "1.21.3"
+libc = "0.2"
+whoami = "2"
+num_cpus = "1.17"
+async-trait = "0.1"
+thiserror = "2.0"
+url = "2.5"
+# gRPC for TPU metrics
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+# Compression for the `record`/`view --replay` subcommands (issue #187).
+# Both are required at the crate level because the writer auto-selects
+# by file extension — dynamically gating on a feature would force the
+# operator to rebuild to record into a `.gz` stream.
+zstd = "0.13"
+flate2 = "1"
+# Support bundle packaging for the `doctor --bundle` subcommand (issue #188).
+tar = "0.4"
+# Pure-Rust SSH client for the agentless view transport (issue #194).
+# Chosen over ssh2/libssh2 so musl static builds do not need a C
+# dependency. russh 0.60 targets edition 2021 with tokio 1.x.
+russh = "0.60"
+[target.'cfg(target_os = "linux")'.dependencies]
+# Tenstorrent dependencies from GitHub
+all-smi-luwen-core = "0.2.0"
+all-smi-luwen-if = "0.7.9"
+all-smi-luwen-ref = "0.7.9"
+all-smi-ttkmd-if = "0.2.2"
+furiosa-smi-rs = { version = "2025.3.0", optional = true }
+cgroups-rs = "0.5.0"
+# Dynamic library loading for tpu_pjrt
+libloading = "0.9"
+
+# AMD GPU support (glibc only, not compatible with musl static linking)
+[target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
+# Pinned exactly: 0.11.4 renamed get_all_proc_usage → update_proc_usage in a
+# patch bump (issue #205). Re-evaluate when bumping.
+libamdgpu_top = "=0.11.4"
+
+[target.'cfg(target_env = "musl")'.dependencies]
+openssl = { version = "0.10.75", features = ["vendored"] }
+
+[target.'cfg(all(target_arch = "aarch64", target_env = "gnu"))'.dependencies]
+openssl = { version = "0.10.75", features = ["vendored"] }
+
+# Windows-specific dependencies
+[target.'cfg(target_os = "windows")'.dependencies]
+wmi = "0.18"
+libloading = "0.9"
+
+# macOS-specific dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+[dev-dependencies]
+tempfile = "3.23"
+tokio = { version = "1.50.0", features = ["full", "test-util"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:crossterm", "dep:axum", "dep:tower-http", "dep:anyhow", "dep:toml", "dep:dirs"]
+mock = ["cli", "dep:rand", "dep:hyper", "dep:hyper-util"]
+# Opt-in Furiosa NPU support. Surfaced by the `furiosa.*` doctor checks
+# (issue #188) and used by the Linux-target `furiosa-smi-rs` optional dep.
+# Note: the bare dep name form (without `dep:` prefix) preserves the
+# implicit `furiosa-smi-rs` feature that existing reader code keys on.
+furiosa = ["furiosa-smi-rs"]
+
+[lib]
+name = "all_smi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "all-smi"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "all-smi-mock-server"
+path = "src/bin/all-smi-mock-server.rs"
+required-features = ["mock"]
+
+[profile.release]
+strip = true          # Remove debug symbols
+lto = true            # Link-Time Optimization
+codegen-units = 1     # Single codegen unit for better optimization
+panic = "abort"       # Abort on panic (removes unwind code)
+opt-level = "z"       # Optimize for size
+
+[lints.clippy]
+# Enable the same lints that CI uses
+uninlined_format_args = "warn"
+# Other useful lints
+needless_return = "warn"
+redundant_closure = "warn"
+manual_range_contains = "warn"
+module_inception = "warn"
+bool_comparison = "warn"
+
+[lints.rust]
+# Rust compiler lints
+unsafe_code = "allow"  # Required for libc calls in process_list.rs
+missing_docs = "allow"

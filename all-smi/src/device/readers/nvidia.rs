@@ -1,0 +1,1168 @@
+// Copyright 2025 Lablup Inc. and Jeongkyu Shin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::device::GpuReader;
+use crate::device::common::constants::BYTES_PER_MB;
+use crate::device::common::{execute_command_default, parse_csv_line};
+use crate::device::process_list::{get_all_processes, merge_gpu_processes};
+use crate::device::readers::common_cache::{DetailBuilder, DeviceStaticInfo, MAX_DEVICES};
+use crate::device::readers::nvidia_hardware::{
+    HardwareDetailCache, collect_gpm_metrics, collect_nvlink_remote_devices,
+};
+use crate::device::readers::nvidia_mig::collect_mig_info;
+use crate::device::readers::nvidia_vgpu::collect_vgpu_info;
+use crate::device::types::{GpuInfo, MigGpuInfo, ProcessInfo, VgpuHostInfo};
+use crate::utils::{get_hostname, with_global_system};
+use chrono::Local;
+use nvml_wrapper::enum_wrappers::device::{PerformanceState, TemperatureThreshold};
+use nvml_wrapper::enums::device::{DeviceArchitecture, UsedGpuMemory};
+use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::{Nvml, cuda_driver_version_major, cuda_driver_version_minor};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+// Global status for NVML error messages
+static NVML_STATUS: Mutex<Option<String>> = Mutex::new(None);
+
+/// Cached per-device temperature thresholds.
+///
+/// NVML reports slowdown / shutdown / GpuMax / acoustic thresholds as hardware
+/// properties that do not change at runtime, so we query them once per device
+/// and hand back copies on every `get_gpu_info` call. Any field that NVML
+/// reports as `NotSupported` — common on older drivers or non-datacenter
+/// SKUs — stays `None` and the UI / exporter will render it as unavailable.
+#[derive(Debug, Clone, Copy, Default)]
+struct ThermalThresholds {
+    slowdown: Option<u32>,
+    shutdown: Option<u32>,
+    max_operating: Option<u32>,
+    acoustic: Option<u32>,
+}
+
+impl ThermalThresholds {
+    /// Whether this snapshot carries any supported threshold. Used to avoid
+    /// permanently caching a fully-empty record produced by transient NVML
+    /// errors (e.g. `Uninitialized` or driver hiccups on the very first call).
+    fn has_any_value(&self) -> bool {
+        self.slowdown.is_some()
+            || self.shutdown.is_some()
+            || self.max_operating.is_some()
+            || self.acoustic.is_some()
+    }
+}
+
+pub struct NvidiaGpuReader {
+    /// Cached driver version (fetched only once)
+    driver_version: OnceLock<String>,
+    /// Cached CUDA version (fetched only once)
+    cuda_version: OnceLock<String>,
+    /// Cached static device information per device index
+    device_static_info: OnceLock<HashMap<u32, DeviceStaticInfo>>,
+    /// Cached NVML handle (initialized once, reused across calls)
+    nvml: Mutex<Option<Nvml>>,
+    /// Cached temperature thresholds per device index. Populated lazily on
+    /// the first successful read and reused for the lifetime of the process.
+    thermal_thresholds: Mutex<HashMap<u32, ThermalThresholds>>,
+    /// Cached static hardware details per device index (NUMA node, GSP
+    /// firmware mode, GSP firmware version). Populated lazily on the first
+    /// call that observes any supported value, following the same "don't
+    /// cache an all-empty snapshot" policy as [`Self::thermal_thresholds`].
+    hardware_details: HardwareDetailCache,
+}
+
+/// Map the NVML [`PerformanceState`] enum to the integer used by the
+/// Prometheus exporter and the TUI. `P0` → 0, `P15` → 15, `Unknown` → `None`.
+///
+/// Kept as a pure function for unit-testing without requiring a real NVML
+/// handle.
+fn performance_state_to_u32(state: PerformanceState) -> Option<u32> {
+    match state {
+        PerformanceState::Zero => Some(0),
+        PerformanceState::One => Some(1),
+        PerformanceState::Two => Some(2),
+        PerformanceState::Three => Some(3),
+        PerformanceState::Four => Some(4),
+        PerformanceState::Five => Some(5),
+        PerformanceState::Six => Some(6),
+        PerformanceState::Seven => Some(7),
+        PerformanceState::Eight => Some(8),
+        PerformanceState::Nine => Some(9),
+        PerformanceState::Ten => Some(10),
+        PerformanceState::Eleven => Some(11),
+        PerformanceState::Twelve => Some(12),
+        PerformanceState::Thirteen => Some(13),
+        PerformanceState::Fourteen => Some(14),
+        PerformanceState::Fifteen => Some(15),
+        PerformanceState::Unknown => None,
+    }
+}
+
+impl Default for NvidiaGpuReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NvidiaGpuReader {
+    pub fn new() -> Self {
+        Self {
+            driver_version: OnceLock::new(),
+            cuda_version: OnceLock::new(),
+            device_static_info: OnceLock::new(),
+            nvml: Mutex::new(Nvml::init().ok()),
+            thermal_thresholds: Mutex::new(HashMap::new()),
+            hardware_details: HardwareDetailCache::new(),
+        }
+    }
+
+    /// Fetch cached thermal thresholds for `index`, populating the cache on
+    /// the first call. All NVML errors (notably `NotSupported` and
+    /// `FunctionNotFound`) are swallowed and leave the respective field as
+    /// `None` — this feature MUST degrade gracefully on older drivers.
+    ///
+    /// Caching policy: a fully-empty snapshot (every field `None`) is NOT
+    /// stored, so a transient NVML error on the first call (`Uninitialized`,
+    /// driver hiccup) will not lock every threshold to `None` for the
+    /// process lifetime. Devices that genuinely never report any threshold
+    /// will pay 4 NVML calls per poll instead of one cached read — an
+    /// acceptable trade since these calls are cheap.
+    fn thermal_thresholds_for(
+        &self,
+        device: &nvml_wrapper::Device,
+        index: u32,
+    ) -> ThermalThresholds {
+        if let Ok(cache) = self.thermal_thresholds.lock()
+            && let Some(existing) = cache.get(&index)
+        {
+            return *existing;
+        }
+
+        let thresholds = ThermalThresholds {
+            slowdown: device
+                .temperature_threshold(TemperatureThreshold::Slowdown)
+                .ok(),
+            shutdown: device
+                .temperature_threshold(TemperatureThreshold::Shutdown)
+                .ok(),
+            max_operating: device
+                .temperature_threshold(TemperatureThreshold::GpuMax)
+                .ok(),
+            acoustic: device
+                .temperature_threshold(TemperatureThreshold::AcousticCurr)
+                .ok(),
+        };
+
+        if thresholds.has_any_value()
+            && let Ok(mut cache) = self.thermal_thresholds.lock()
+        {
+            cache.insert(index, thresholds);
+        }
+
+        thresholds
+    }
+
+    /// Get cached driver version, initializing if needed
+    fn get_driver_version(&self, nvml: &Nvml) -> String {
+        self.driver_version
+            .get_or_init(|| {
+                nvml.sys_driver_version()
+                    .unwrap_or_else(|_| "Unknown".to_string())
+            })
+            .clone()
+    }
+
+    /// Get cached CUDA version, initializing if needed
+    fn get_cuda_version(&self, nvml: &Nvml) -> String {
+        self.cuda_version
+            .get_or_init(|| {
+                let version = nvml.sys_cuda_driver_version().unwrap_or(0);
+                format!(
+                    "{}.{}",
+                    cuda_driver_version_major(version),
+                    cuda_driver_version_minor(version)
+                )
+            })
+            .clone()
+    }
+
+    /// Execute a closure with a reference to the cached NVML handle.
+    /// Reinitializes the handle if it was previously unavailable or became invalid.
+    fn with_nvml<F, T>(&self, f: F) -> Result<T, NvmlError>
+    where
+        F: FnOnce(&Nvml) -> T,
+    {
+        let mut guard = self.nvml.lock().map_err(|_| NvmlError::Unknown)?;
+        // Try to use existing handle first
+        if let Some(ref nvml) = *guard {
+            // Validate the handle is still usable by querying device count
+            if nvml.device_count().is_ok() {
+                return Ok(f(nvml));
+            }
+            // Handle is stale, drop and reinitialize below
+        }
+        // Initialize or reinitialize
+        match Nvml::init() {
+            Ok(nvml) => {
+                let result = f(&nvml);
+                *guard = Some(nvml);
+                Ok(result)
+            }
+            Err(e) => {
+                *guard = None;
+                Err(e)
+            }
+        }
+    }
+
+    /// Get cached static device info for all devices, initializing if needed
+    fn get_device_static_info(&self, nvml: &Nvml) -> &HashMap<u32, DeviceStaticInfo> {
+        self.device_static_info.get_or_init(|| {
+            let mut device_info_map = HashMap::new();
+            let driver_version = self.get_driver_version(nvml);
+            let cuda_version = self.get_cuda_version(nvml);
+
+            if let Ok(device_count) = nvml.device_count() {
+                // Add device count validation to prevent unbounded growth
+                let device_count = device_count.min(MAX_DEVICES as u32);
+
+                for i in 0..device_count {
+                    if let Ok(device) = nvml.device_by_index(i) {
+                        let detail = create_device_detail(&device, &driver_version, &cuda_version);
+                        let name = device.name().unwrap_or_else(|_| "Unknown GPU".to_string());
+                        let uuid = device.uuid().ok();
+                        device_info_map
+                            .insert(i, DeviceStaticInfo::with_details(name, uuid, detail));
+                    }
+                }
+            }
+            device_info_map
+        })
+    }
+
+    /// Get GPU processes using cached NVML handle, falling back to nvidia-smi
+    fn get_gpu_processes_cached(&self) -> (Vec<ProcessInfo>, HashSet<u32>) {
+        match self.with_nvml(get_gpu_processes_nvml) {
+            Ok(result) => result,
+            Err(e) => {
+                set_nvml_status(e);
+                get_gpu_processes_nvidia_smi()
+            }
+        }
+    }
+
+    /// Get GPU info using NVML with cached static values
+    fn get_gpu_info_nvml(&self, nvml: &Nvml) -> Vec<GpuInfo> {
+        let mut gpu_info = Vec::new();
+
+        // Get cached static device information (fetched only once)
+        let device_static_info = self.get_device_static_info(nvml);
+
+        if let Ok(device_count) = nvml.device_count() {
+            for i in 0..device_count {
+                if let Ok(device) = nvml.device_by_index(i) {
+                    // Get cached static detail for this device
+                    let detail = device_static_info
+                        .get(&i)
+                        .map(|info| info.detail.clone())
+                        .unwrap_or_default();
+
+                    // Determine memory values: use system memory for UMA devices
+                    let mem_info = device.memory_info().ok();
+                    let mem_total_raw = mem_info.as_ref().map(|m| m.total).unwrap_or(0);
+                    let uma = is_uma_device_with_mem(&device, mem_total_raw);
+                    let (total_memory, used_memory) = if uma {
+                        get_system_memory_for_uma()
+                    } else {
+                        (
+                            mem_total_raw,
+                            mem_info.as_ref().map(|m| m.used).unwrap_or(0),
+                        )
+                    };
+
+                    // Best-effort thermal threshold read (cached per device).
+                    let thresholds = self.thermal_thresholds_for(&device, i);
+                    // Best-effort current P-state read. `NotSupported` /
+                    // driver-too-old / MIG child device all degrade to `None`.
+                    let performance_state = device
+                        .performance_state()
+                        .ok()
+                        .and_then(performance_state_to_u32);
+
+                    // Static hardware details: NUMA node id + GSP firmware
+                    // (mode + version). All three are cached per device
+                    // since they never change at runtime.
+                    let hw = self.hardware_details.get_or_fetch(&device, i);
+                    // Active NvLinks are queried every poll — link state
+                    // can change at runtime if a cable is disconnected.
+                    let nvlink_remote_devices = collect_nvlink_remote_devices(nvml, &device);
+                    // GPM metrics are opt-in (Hopper+). `collect_gpm_metrics`
+                    // returns `None` everywhere else and a populated-but-empty
+                    // snapshot on supported hardware (full two-sample
+                    // implementation deferred to a follow-up).
+                    let gpm_metrics = collect_gpm_metrics(&device);
+
+                    let info = GpuInfo {
+                        uuid: device.uuid().unwrap_or_else(|_| format!("GPU-{i}")),
+                        time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                        name: device.name().unwrap_or_else(|_| "Unknown GPU".to_string()),
+                        device_type: "GPU".to_string(),
+                        host_id: get_hostname(),
+                        hostname: get_hostname(),
+                        instance: get_hostname(),
+                        utilization: device
+                            .utilization_rates()
+                            .map(|u| u.gpu as f64)
+                            .unwrap_or(0.0),
+                        ane_utilization: 0.0,
+                        dla_utilization: None,
+                        tensorcore_utilization: None,
+                        temperature: device
+                            .temperature(
+                                nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu,
+                            )
+                            .unwrap_or(0),
+                        used_memory,
+                        total_memory,
+                        frequency: device
+                            .clock(
+                                nvml_wrapper::enum_wrappers::device::Clock::Graphics,
+                                nvml_wrapper::enum_wrappers::device::ClockId::Current,
+                            )
+                            .unwrap_or(0),
+                        power_consumption: device
+                            .power_usage()
+                            .map(|p| p as f64 / 1000.0)
+                            .unwrap_or(0.0),
+                        gpu_core_count: None,
+                        temperature_threshold_slowdown: thresholds.slowdown,
+                        temperature_threshold_shutdown: thresholds.shutdown,
+                        temperature_threshold_max_operating: thresholds.max_operating,
+                        temperature_threshold_acoustic: thresholds.acoustic,
+                        performance_state,
+                        numa_node_id: hw.numa_node_id,
+                        gsp_firmware_mode: hw.gsp_firmware_mode,
+                        gsp_firmware_version: hw.gsp_firmware_version,
+                        nvlink_remote_devices,
+                        gpm_metrics,
+                        detail,
+                    };
+                    gpu_info.push(info);
+                }
+            }
+        }
+
+        gpu_info
+    }
+}
+
+impl GpuReader for NvidiaGpuReader {
+    fn get_gpu_info(&self) -> Vec<GpuInfo> {
+        // Try cached NVML handle first
+        match self.with_nvml(|nvml| self.get_gpu_info_nvml(nvml)) {
+            Ok(info) => {
+                // Clear any previous error status on success
+                if let Ok(mut status) = NVML_STATUS.lock() {
+                    *status = None;
+                }
+                info
+            }
+            Err(e) => {
+                // Store the error status for notification
+                set_nvml_status(e);
+                get_gpu_info_nvidia_smi()
+            }
+        }
+    }
+
+    fn get_process_info(&self) -> Vec<ProcessInfo> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
+
+        // Get GPU processes and PIDs using cached NVML handle
+        let (gpu_processes, gpu_pids) = self.get_gpu_processes_cached();
+
+        // Use global system instance to avoid file descriptor leak
+        let all_processes = with_global_system(|system| {
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::everything().with_user(UpdateKind::Always),
+            );
+            system.refresh_memory();
+
+            // Get all system processes
+            get_all_processes(system, &gpu_pids)
+        });
+
+        // Merge GPU information into the process list while preserving per-device rows.
+        merge_gpu_processes(all_processes, gpu_processes)
+    }
+
+    fn get_gpu_processes(&self) -> (Vec<ProcessInfo>, HashSet<u32>) {
+        self.get_gpu_processes_cached()
+    }
+
+    fn get_vgpu_info(&self) -> Vec<VgpuHostInfo> {
+        // Degrade to an empty vector on any NVML failure. Callers MUST treat
+        // an empty response as "not vGPU-capable" and render nothing.
+        self.with_nvml(collect_vgpu_info).unwrap_or_default()
+    }
+
+    fn get_mig_info(&self) -> Vec<MigGpuInfo> {
+        // Degrade to an empty vector on any NVML failure (driver too old,
+        // pre-Ampere GPUs, MIG not enabled, missing permissions). Callers
+        // MUST treat an empty response as "not MIG-capable" and render
+        // nothing.
+        self.with_nvml(collect_mig_info).unwrap_or_default()
+    }
+}
+
+/// Return `true` when the device name indicates a UMA-class chip.
+///
+/// This covers the nvidia-smi fallback path and the NVML name-check fallback
+/// in `is_uma_device_with_mem`.  Extracted as a pure function for testability.
+fn is_uma_device_name(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    name_lower.contains("gb10") || name_lower.contains("dgx spark")
+}
+
+/// Detect whether a device uses Unified Memory Architecture (UMA).
+///
+/// Returns `true` when NVML cannot report dedicated GPU memory (total == 0 or error)
+/// AND the device is identified as a UMA-class chip (e.g. GB10 / Blackwell).
+/// Check if a device is UMA based on architecture or device name.
+/// The caller should pass memory_total from a prior `memory_info()` call
+/// to avoid redundant NVML IPC round-trips.
+fn is_uma_device_with_mem(device: &nvml_wrapper::Device, memory_total: u64) -> bool {
+    if memory_total > 0 {
+        return false;
+    }
+
+    // Check architecture first (preferred — covers future Blackwell UMA products)
+    if let Ok(arch) = device.architecture()
+        && arch == DeviceArchitecture::Blackwell
+    {
+        return true;
+    }
+
+    // Fallback: match known UMA device names
+    if let Ok(name) = device.name()
+        && is_uma_device_name(&name)
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Read system memory from `/proc/meminfo` for UMA devices.
+/// Returns `(total_bytes, used_bytes)`.
+fn get_system_memory_for_uma() -> (u64, u64) {
+    read_meminfo_memory("/proc/meminfo")
+}
+
+/// Parse `/proc/meminfo`-format content and return `(total_bytes, used_bytes)`.
+/// Extracted for testability.
+fn read_meminfo_memory(path: &str) -> (u64, u64) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+    parse_meminfo_content(&content)
+}
+
+/// Parse meminfo content string and return `(total_bytes, used_bytes)`.
+fn parse_meminfo_content(content: &str) -> (u64, u64) {
+    let mut total: u64 = 0;
+    let mut available: u64 = 0;
+
+    for line in content.lines() {
+        if line.starts_with("MemTotal:") {
+            if let Some(value) = line.split_whitespace().nth(1) {
+                total = value.parse::<u64>().unwrap_or(0) * 1024; // kB -> bytes
+            }
+        } else if line.starts_with("MemAvailable:")
+            && let Some(value) = line.split_whitespace().nth(1)
+        {
+            available = value.parse::<u64>().unwrap_or(0) * 1024;
+        }
+    }
+
+    (total, total.saturating_sub(available))
+}
+
+// Helper function to set NVML status
+fn set_nvml_status(error: NvmlError) {
+    if let Ok(mut status) = NVML_STATUS.lock() {
+        *status = Some(format!("NVML Error: {error}"));
+    }
+}
+
+// Get global NVML status
+#[allow(dead_code)]
+pub fn get_nvml_status() -> Option<String> {
+    NVML_STATUS.lock().ok()?.clone()
+}
+
+/// Get a user-friendly message about NVML status
+#[allow(dead_code)]
+pub fn get_nvml_status_message() -> Option<String> {
+    // Only return the stored status, don't try to initialize NVML here
+    match NVML_STATUS.lock() {
+        Ok(status) => status.clone(),
+        _ => None,
+    }
+}
+
+// Get GPU processes using NVML
+fn get_gpu_processes_nvml(nvml: &Nvml) -> (Vec<ProcessInfo>, HashSet<u32>) {
+    let mut gpu_process_map: HashMap<(u32, String), ProcessInfo> = HashMap::new();
+    let mut gpu_pids = HashSet::new();
+
+    if let Ok(device_count) = nvml.device_count() {
+        for device_index in 0..device_count {
+            if let Ok(device) = nvml.device_by_index(device_index) {
+                let device_uuid = device
+                    .uuid()
+                    .unwrap_or_else(|_| format!("GPU-{device_index}"));
+
+                // Get compute processes
+                if let Ok(processes) = device.running_compute_processes() {
+                    for proc in processes {
+                        if proc.pid > 0 {
+                            gpu_pids.insert(proc.pid);
+                            let process_info = create_base_process_info(
+                                device_index as usize,
+                                device_uuid.clone(),
+                                proc.pid,
+                                proc.used_gpu_memory,
+                            );
+                            merge_nvml_process_entry(&mut gpu_process_map, process_info);
+                        }
+                    }
+                }
+
+                // Also check graphics processes
+                if let Ok(processes) = device.running_graphics_processes() {
+                    for proc in processes {
+                        if proc.pid > 0 {
+                            gpu_pids.insert(proc.pid);
+                            let process_info = create_base_process_info(
+                                device_index as usize,
+                                device_uuid.clone(),
+                                proc.pid,
+                                proc.used_gpu_memory,
+                            );
+                            merge_nvml_process_entry(&mut gpu_process_map, process_info);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (gpu_process_map.into_values().collect(), gpu_pids)
+}
+
+fn merge_nvml_process_entry(
+    gpu_process_map: &mut HashMap<(u32, String), ProcessInfo>,
+    process_info: ProcessInfo,
+) {
+    // A single PID can validly appear on multiple GPUs. We key by (pid, device_uuid)
+    // so we preserve per-device attribution instead of collapsing by PID.
+    let key = (process_info.pid, process_info.device_uuid.clone());
+
+    // NVML can report overlapping compute/graphics rows for the same (pid, device).
+    // Use max memory as a conservative merge to avoid double-counting inflation.
+    gpu_process_map
+        .entry(key)
+        .and_modify(|existing| {
+            existing.used_memory = existing.used_memory.max(process_info.used_memory);
+        })
+        .or_insert(process_info);
+}
+
+// Helper to create base ProcessInfo
+fn create_base_process_info(
+    device_id: usize,
+    device_uuid: String,
+    pid: u32,
+    memory: UsedGpuMemory,
+) -> ProcessInfo {
+    let used_memory_mb = match memory {
+        UsedGpuMemory::Used(bytes) => bytes / BYTES_PER_MB,
+        UsedGpuMemory::Unavailable => 0,
+    };
+
+    ProcessInfo {
+        device_id,
+        device_uuid,
+        pid,
+        process_name: String::new(), // Will be filled by sysinfo
+        used_memory: used_memory_mb * BYTES_PER_MB, // Convert MB to bytes
+        cpu_percent: 0.0,            // Will be filled by sysinfo
+        memory_percent: 0.0,         // Will be filled by sysinfo
+        memory_rss: 0,               // Will be filled by sysinfo
+        memory_vms: 0,               // Will be filled by sysinfo
+        user: String::new(),         // Will be filled by sysinfo
+        state: String::new(),        // Will be filled by sysinfo
+        start_time: String::new(),   // Will be filled by sysinfo
+        cpu_time: 0,                 // Will be filled by sysinfo
+        command: String::new(),      // Will be filled by sysinfo
+        ppid: 0,                     // Will be filled by sysinfo
+        threads: 0,                  // Will be filled by sysinfo
+        uses_gpu: true,
+        priority: 0,          // Will be filled by sysinfo
+        nice_value: 0,        // Will be filled by sysinfo
+        gpu_utilization: 0.0, // NVIDIA doesn't provide per-process GPU utilization
+    }
+}
+
+// Macros to reduce boilerplate
+macro_rules! add_detail {
+    ($detail:expr_2021, $result:expr_2021, $key:expr_2021) => {
+        if let Ok(value) = $result {
+            $detail.insert($key.to_string(), format!("{value:?}"));
+        }
+    };
+}
+
+macro_rules! add_detail_fmt {
+    ($detail:expr_2021, $result:expr_2021, $key:expr_2021, $fmt:expr_2021) => {
+        if let Ok(value) = $result {
+            $detail.insert($key.to_string(), format!($fmt, value));
+        }
+    };
+}
+
+// Helper to create device detail HashMap
+fn create_device_detail(
+    device: &nvml_wrapper::Device,
+    driver_version: &str,
+    cuda_version: &str,
+) -> HashMap<String, String> {
+    let builder = DetailBuilder::new()
+        .insert("Driver Version", driver_version)
+        .insert("CUDA Version", cuda_version)
+        // Add unified AI acceleration library labels
+        .insert("lib_name", "CUDA")
+        .insert("lib_version", cuda_version);
+
+    // Add all device details using helper macros
+    let mut detail = builder.build();
+    add_detail!(detail, device.brand(), "Brand");
+    add_detail!(detail, device.architecture(), "architecture");
+
+    let mem_total = device.memory_info().map(|m| m.total).unwrap_or(0);
+    let uma = is_uma_device_with_mem(device, mem_total);
+
+    // Suppress PCIe metrics for UMA devices — they use internal interconnect
+    if uma {
+        detail.insert("Memory Type".to_string(), "Unified".to_string());
+        detail.insert("Interconnect".to_string(), "Integrated".to_string());
+    } else {
+        add_detail!(detail, device.current_pcie_link_gen(), "PCIe Generation");
+        add_detail_fmt!(
+            detail,
+            device.current_pcie_link_width(),
+            "PCIe Width",
+            "x{}"
+        );
+        add_detail!(detail, device.max_pcie_link_gen(), "pcie_gen_max");
+        add_detail!(detail, device.max_pcie_link_width(), "pcie_width_max");
+    }
+
+    add_detail!(detail, device.compute_mode(), "compute_mode");
+    add_detail!(detail, device.performance_state(), "performance_state");
+
+    // Power limits
+    if let Ok(power_limit) = device.power_management_limit() {
+        detail.insert(
+            "power_limit_current".to_string(),
+            format!("{:.2}", power_limit as f64 / 1000.0),
+        );
+    }
+    if let Ok(power_limit_default) = device.power_management_limit_default() {
+        detail.insert(
+            "power_limit_default".to_string(),
+            format!("{:.2}", power_limit_default as f64 / 1000.0),
+        );
+    }
+    if let Ok(constraints) = device.power_management_limit_constraints() {
+        detail.insert(
+            "power_limit_min".to_string(),
+            format!("{:.2}", constraints.min_limit as f64 / 1000.0),
+        );
+        detail.insert(
+            "power_limit_max".to_string(),
+            format!("{:.2}", constraints.max_limit as f64 / 1000.0),
+        );
+    }
+
+    // Max clocks
+    use nvml_wrapper::enum_wrappers::device::Clock;
+    add_detail!(
+        detail,
+        device.max_customer_boost_clock(Clock::Graphics),
+        "clock_graphics_max"
+    );
+    add_detail!(
+        detail,
+        device.max_customer_boost_clock(Clock::Memory),
+        "clock_memory_max"
+    );
+
+    // ECC mode
+    if let Ok(ecc_enabled) = device.is_ecc_enabled() {
+        detail.insert(
+            "ecc_mode_current".to_string(),
+            if ecc_enabled.currently_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+            .to_string(),
+        );
+        if ecc_enabled.currently_enabled != ecc_enabled.pending_enabled {
+            detail.insert(
+                "ecc_mode_pending".to_string(),
+                if ecc_enabled.pending_enabled {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+                .to_string(),
+            );
+        }
+    }
+
+    // MIG mode
+    if let Ok(mig_mode) = device.mig_mode() {
+        detail.insert(
+            "mig_mode_current".to_string(),
+            format!("{:?}", mig_mode.current),
+        );
+        if mig_mode.current != mig_mode.pending {
+            detail.insert(
+                "mig_mode_pending".to_string(),
+                format!("{:?}", mig_mode.pending),
+            );
+        }
+    }
+
+    // VBIOS version
+    add_detail!(detail, device.vbios_version(), "vbios_version");
+
+    detail
+}
+
+// Fallback implementation using nvidia-smi
+fn get_gpu_info_nvidia_smi() -> Vec<GpuInfo> {
+    let output = match execute_command_default(
+        "nvidia-smi",
+        &[
+            "--query-gpu=index,uuid,name,utilization.gpu,temperature.gpu,memory.used,memory.total,clocks.gr,power.draw",
+            "--format=csv,noheader,nounits",
+        ],
+    ) {
+        Ok(output) => output.stdout,
+        Err(_) => return Vec::new(),
+    };
+
+    let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let hostname = get_hostname();
+
+    output
+        .lines()
+        .filter_map(|line| {
+            let parts = parse_csv_line(line);
+            if parts.len() >= 9 {
+                let mut used_memory = parse_memory_value(&parts[5]);
+                let mut total_memory = parse_memory_value(&parts[6]);
+                let mut detail = HashMap::new();
+
+                // Detect UMA: memory fields are [N/A] and device name suggests UMA
+                if total_memory == 0 && is_uma_device_name(&parts[2]) {
+                    let (sys_total, sys_used) = get_system_memory_for_uma();
+                    total_memory = sys_total;
+                    used_memory = sys_used;
+                    detail.insert("Memory Type".to_string(), "Unified".to_string());
+                    detail.insert("Interconnect".to_string(), "Integrated".to_string());
+                }
+
+                Some(GpuInfo {
+                    uuid: parts[1].to_string(),
+                    time: time.clone(),
+                    name: parts[2].to_string(),
+                    device_type: "GPU".to_string(),
+                    host_id: hostname.clone(),
+                    hostname: hostname.clone(),
+                    instance: hostname.clone(),
+                    utilization: parts[3].parse().unwrap_or(0.0),
+                    ane_utilization: 0.0,
+                    dla_utilization: None,
+                    tensorcore_utilization: None,
+                    temperature: parts[4].parse().unwrap_or(0),
+                    used_memory,
+                    total_memory,
+                    frequency: parts[7].parse().unwrap_or(0),
+                    power_consumption: parts[8].replace("[N/A]", "0").parse::<f64>().unwrap_or(0.0)
+                        / 1000.0,
+                    gpu_core_count: None,
+                    // nvidia-smi CSV path does not surface thresholds / P-state;
+                    // they stay unavailable. The NVML path above is the
+                    // preferred source when the library is present.
+                    temperature_threshold_slowdown: None,
+                    temperature_threshold_shutdown: None,
+                    temperature_threshold_max_operating: None,
+                    temperature_threshold_acoustic: None,
+                    performance_state: None,
+                    // Hardware details (issue #132) are only available via
+                    // NVML — the CSV fallback cannot surface them. Leave
+                    // them at the "unavailable" defaults so downstream
+                    // consumers render them as missing rather than zero.
+                    numa_node_id: None,
+                    gsp_firmware_mode: None,
+                    gsp_firmware_version: None,
+                    nvlink_remote_devices: Vec::new(),
+                    gpm_metrics: None,
+                    detail,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// Get GPU processes using nvidia-smi
+fn get_gpu_processes_nvidia_smi() -> (Vec<ProcessInfo>, HashSet<u32>) {
+    let mut gpu_processes = Vec::new();
+    let mut gpu_pids = HashSet::new();
+
+    let output = match execute_command_default(
+        "nvidia-smi",
+        &[
+            "--query-compute-apps=gpu_uuid,pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ],
+    ) {
+        Ok(output) => output.stdout,
+        Err(_) => return (gpu_processes, gpu_pids),
+    };
+
+    for line in output.lines() {
+        let parts = parse_csv_line(line);
+        if parts.len() >= 3
+            && let Ok(pid) = parts[1].parse::<u32>()
+        {
+            gpu_pids.insert(pid);
+            gpu_processes.push(ProcessInfo {
+                device_id: 0, // We don't have device index from this query
+                device_uuid: parts[0].to_string(),
+                pid,
+                process_name: String::new(),
+                used_memory: parse_memory_value(&parts[2]),
+                cpu_percent: 0.0,
+                memory_percent: 0.0,
+                memory_rss: 0,
+                memory_vms: 0,
+                user: String::new(),
+                state: String::new(),
+                start_time: String::new(),
+                cpu_time: 0,
+                command: String::new(),
+                ppid: 0,
+                threads: 0,
+                uses_gpu: true,
+                priority: 0,
+                nice_value: 0,
+                gpu_utilization: 0.0,
+            });
+        }
+    }
+
+    (gpu_processes, gpu_pids)
+}
+
+// Helper to parse memory values
+fn parse_memory_value(value: &str) -> u64 {
+    value.parse::<u64>().unwrap_or(0) * BYTES_PER_MB // Convert MB to bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_process(pid: u32, device_uuid: &str, used_memory: u64) -> ProcessInfo {
+        ProcessInfo {
+            device_id: 0,
+            device_uuid: device_uuid.to_string(),
+            pid,
+            process_name: String::new(),
+            used_memory,
+            cpu_percent: 0.0,
+            memory_percent: 0.0,
+            memory_rss: 0,
+            memory_vms: 0,
+            user: String::new(),
+            state: String::new(),
+            start_time: String::new(),
+            cpu_time: 0,
+            command: String::new(),
+            ppid: 0,
+            threads: 0,
+            uses_gpu: true,
+            priority: 0,
+            nice_value: 0,
+            gpu_utilization: 0.0,
+        }
+    }
+
+    #[test]
+    fn merge_nvml_process_entry_preserves_pid_on_multiple_devices() {
+        let mut process_map = HashMap::new();
+        merge_nvml_process_entry(&mut process_map, test_process(123, "GPU-A", 1024));
+        merge_nvml_process_entry(&mut process_map, test_process(123, "GPU-B", 2048));
+
+        assert_eq!(process_map.len(), 2);
+        assert!(process_map.contains_key(&(123, "GPU-A".to_string())));
+        assert!(process_map.contains_key(&(123, "GPU-B".to_string())));
+    }
+
+    #[test]
+    fn merge_nvml_process_entry_coalesces_duplicate_pid_device_with_max_memory() {
+        let mut process_map = HashMap::new();
+        merge_nvml_process_entry(&mut process_map, test_process(123, "GPU-A", 1024));
+        merge_nvml_process_entry(&mut process_map, test_process(123, "GPU-A", 4096));
+
+        assert_eq!(process_map.len(), 1);
+        let row = process_map.get(&(123, "GPU-A".to_string())).unwrap();
+        assert_eq!(row.used_memory, 4096);
+    }
+
+    #[test]
+    fn parse_meminfo_content_extracts_total_and_used() {
+        let content = "\
+MemTotal:       137021440 kB
+MemFree:          204800 kB
+MemAvailable:    9437184 kB
+Buffers:          102400 kB
+Cached:          4096000 kB
+";
+        let (total, used) = parse_meminfo_content(content);
+        // 137021440 kB = 137021440 * 1024 bytes
+        assert_eq!(total, 137_021_440 * 1024);
+        // used = total - available = (137021440 - 9437184) * 1024
+        assert_eq!(used, (137_021_440 - 9_437_184) * 1024);
+    }
+
+    #[test]
+    fn parse_meminfo_content_handles_empty_input() {
+        let (total, used) = parse_meminfo_content("");
+        assert_eq!(total, 0);
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn parse_meminfo_content_handles_missing_available() {
+        let content = "MemTotal:       131072 kB\n";
+        let (total, used) = parse_meminfo_content(content);
+        assert_eq!(total, 131_072 * 1024);
+        // available defaults to 0, so used = total - 0 = total
+        assert_eq!(used, 131_072 * 1024);
+    }
+
+    #[test]
+    fn parse_memory_value_handles_na() {
+        assert_eq!(parse_memory_value("[N/A]"), 0);
+    }
+
+    #[test]
+    fn parse_memory_value_converts_mb_to_bytes() {
+        assert_eq!(parse_memory_value("1024"), 1024 * BYTES_PER_MB);
+    }
+
+    // --- is_uma_device_name tests ---
+
+    #[test]
+    fn is_uma_device_name_matches_gb10_lowercase() {
+        assert!(is_uma_device_name("gb10 super"));
+    }
+
+    #[test]
+    fn is_uma_device_name_matches_gb10_mixed_case() {
+        assert!(is_uma_device_name("NVIDIA GB10"));
+    }
+
+    #[test]
+    fn is_uma_device_name_matches_dgx_spark_lowercase() {
+        assert!(is_uma_device_name("dgx spark"));
+    }
+
+    #[test]
+    fn is_uma_device_name_matches_dgx_spark_mixed_case() {
+        assert!(is_uma_device_name("NVIDIA DGX Spark"));
+    }
+
+    #[test]
+    fn is_uma_device_name_rejects_standard_gpu() {
+        assert!(!is_uma_device_name("NVIDIA GeForce RTX 4090"));
+        assert!(!is_uma_device_name("Tesla H100 SXM5 80GB"));
+        assert!(!is_uma_device_name("A100-SXM4-80GB"));
+    }
+
+    #[test]
+    fn is_uma_device_name_rejects_empty_string() {
+        assert!(!is_uma_device_name(""));
+    }
+
+    // --- read_meminfo_memory tests ---
+
+    #[test]
+    fn read_meminfo_memory_reads_temp_file() {
+        use std::io::Write;
+
+        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        writeln!(
+            tmp,
+            "MemTotal:       65536 kB\nMemFree:        1024 kB\nMemAvailable:   4096 kB"
+        )
+        .unwrap();
+
+        let (total, used) = read_meminfo_memory(tmp.path().to_str().unwrap());
+        assert_eq!(total, 65_536 * 1024);
+        assert_eq!(used, (65_536 - 4_096) * 1024);
+    }
+
+    #[test]
+    fn read_meminfo_memory_returns_zeros_for_missing_file() {
+        let (total, used) = read_meminfo_memory("/nonexistent/path/meminfo");
+        assert_eq!(total, 0);
+        assert_eq!(used, 0);
+    }
+
+    // --- parse_meminfo_content edge case tests ---
+
+    #[test]
+    fn parse_meminfo_content_used_does_not_underflow_when_available_exceeds_total() {
+        // Defensive: available > total should saturate to 0 rather than wrap
+        let content = "MemTotal:       1000 kB\nMemAvailable:   2000 kB\n";
+        let (total, used) = parse_meminfo_content(content);
+        assert_eq!(total, 1_000 * 1024);
+        assert_eq!(used, 0); // saturating_sub prevents underflow
+    }
+
+    #[test]
+    fn parse_meminfo_content_ignores_malformed_lines() {
+        let content = "MemTotal: notanumber kB\nMemAvailable: alsonotanumber kB\n";
+        let (total, used) = parse_meminfo_content(content);
+        assert_eq!(total, 0);
+        assert_eq!(used, 0);
+    }
+
+    // --- performance_state_to_u32 tests ---
+
+    #[test]
+    fn performance_state_to_u32_maps_extremes() {
+        assert_eq!(performance_state_to_u32(PerformanceState::Zero), Some(0));
+        assert_eq!(
+            performance_state_to_u32(PerformanceState::Fifteen),
+            Some(15)
+        );
+    }
+
+    #[test]
+    fn performance_state_to_u32_maps_midrange() {
+        assert_eq!(performance_state_to_u32(PerformanceState::Two), Some(2));
+        assert_eq!(performance_state_to_u32(PerformanceState::Eight), Some(8));
+        assert_eq!(performance_state_to_u32(PerformanceState::Twelve), Some(12));
+    }
+
+    #[test]
+    fn performance_state_to_u32_returns_none_for_unknown() {
+        // `Unknown` is the sentinel NVML returns when the driver cannot
+        // report a P-state; MUST translate to `None` so downstream surfaces
+        // render "unavailable" rather than pretending the GPU is at P0.
+        assert_eq!(performance_state_to_u32(PerformanceState::Unknown), None);
+    }
+
+    // --- ThermalThresholds caching predicate tests ---
+
+    #[test]
+    fn thermal_thresholds_has_any_value_is_false_when_all_none() {
+        // Regression: a transient NVML error (Uninitialized / driver hiccup)
+        // on the very first call could yield this snapshot. Caching it would
+        // permanently lock every threshold to `None` for the process
+        // lifetime, so `has_any_value` MUST return `false` here.
+        let empty = ThermalThresholds::default();
+        assert!(!empty.has_any_value());
+    }
+
+    #[test]
+    fn thermal_thresholds_has_any_value_is_true_when_any_field_set() {
+        // Any single populated field is enough to consider the snapshot
+        // worth caching — the device clearly reported something.
+        let only_slowdown = ThermalThresholds {
+            slowdown: Some(93),
+            ..Default::default()
+        };
+        assert!(only_slowdown.has_any_value());
+
+        let only_shutdown = ThermalThresholds {
+            shutdown: Some(98),
+            ..Default::default()
+        };
+        assert!(only_shutdown.has_any_value());
+
+        let only_max_op = ThermalThresholds {
+            max_operating: Some(87),
+            ..Default::default()
+        };
+        assert!(only_max_op.has_any_value());
+
+        let only_acoustic = ThermalThresholds {
+            acoustic: Some(75),
+            ..Default::default()
+        };
+        assert!(only_acoustic.has_any_value());
+    }
+
+    #[test]
+    fn performance_state_to_u32_covers_every_variant() {
+        // Guard against future nvml-wrapper enum additions silently
+        // producing `None` values — if a new variant is added, this test
+        // will fail until the mapping is extended.
+        let variants = [
+            PerformanceState::Zero,
+            PerformanceState::One,
+            PerformanceState::Two,
+            PerformanceState::Three,
+            PerformanceState::Four,
+            PerformanceState::Five,
+            PerformanceState::Six,
+            PerformanceState::Seven,
+            PerformanceState::Eight,
+            PerformanceState::Nine,
+            PerformanceState::Ten,
+            PerformanceState::Eleven,
+            PerformanceState::Twelve,
+            PerformanceState::Thirteen,
+            PerformanceState::Fourteen,
+            PerformanceState::Fifteen,
+        ];
+        for (expected, variant) in variants.iter().enumerate() {
+            assert_eq!(performance_state_to_u32(*variant), Some(expected as u32));
+        }
+    }
+}

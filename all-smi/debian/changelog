@@ -1,0 +1,231 @@
+all-smi (0.20.1-0) jammy; urgency=medium
+
+  * Fix local header metric row jitter with fixed-width formatted fields
+  * Auto-promote pre-release to release after all builds complete in CI
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Thu, 10 Apr 2026 00:00:00 +0000
+
+all-smi (0.20.0-0) jammy; urgency=medium
+
+  * Redesign local-mode TUI with dedicated Activity panel
+  * Add braille sparkline utility module for GPU/ANE/Pkg Power visualization
+  * Gate Cluster Overview and tabs behind remote mode for cleaner local UI
+  * Add local-mode one-line host summary bar
+  * Promote CPU per-core view to always-on local Activity panel
+  * Add GPU / ANE / Pkg Power sparkline stack to Activity panel
+  * Relocate per-node LED grid next to Cluster Overview in remote mode
+  * Polish local mode Activity panel (border, P/E gauge alignment, ANE row, Processes header)
+  * Add Apple M5 Pro/Max Super core (S-CPU) and new IOReport channel support
+  * Complete remaining epic 152 TUI integration gaps
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Thu, 10 Apr 2026 00:00:00 +0000
+
+all-smi (0.19.0-0) jammy; urgency=medium
+
+  * Fix Apple Silicon SMC `flt` float sensor decoding (little-endian) to restore real CPU/GPU die temperatures
+  * Standardise Apple Silicon architecture detail key to lowercase across readers and aggregator
+  * Wire cpu_macos::get_cpu_temperature through NativeMetricsData so CPU Temp. gauge is no longer stuck at 0 °C
+  * Fall back to SMC CPU die temperature on Apple Silicon when the GPU sensor is unavailable
+  * Dashboard "Avg. Temp" now shows numeric °C on every platform; Apple Silicon gains a "Thermal" cell for thermal pressure level
+  * Per-GPU list view shows real numeric die temperature on Apple Silicon instead of thermal pressure text
+  * Cache platform detection results (has_nvidia, has_gaudi, etc.) in a process-global OnceLock to avoid per-frame system_profiler probes on macOS
+  * Widen process list TIME+ column to 10 chars so long runtimes no longer push the Command column out of alignment
+  * Add regression tests for SMC FLT little-endian decoding and TIME+ column width invariant
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Wed, 08 Apr 2026 00:00:00 +0000
+
+all-smi (0.18.1-0) jammy; urgency=medium
+
+  * Eliminate 1-second per-frame stall caused by RuntimeEnvironment::detect()
+  * Make TUI terminal flush non-blocking for SSH responsiveness
+  * Reduce TUI rendering overhead for remote/SSH sessions
+  * Drain pending key events after render to prevent input cascade
+  * Cache per-frame filesystem reads and remove detect() from tests
+  * Increase marquee scroll speed now that frame stall is fixed
+  * Gate Linux-only chassis functions with cfg(target_os) to suppress macOS warnings
+  * Suppress macOS build warnings for Linux-only OnceLock and mut
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Tue, 08 Apr 2026 00:00:00 +0000
+
+all-smi (0.18.0-0) jammy; urgency=medium
+
+  * Reduce TUI idle CPU with event-driven UI wakeups
+  * Snapshot AppState before rendering to shorten critical section
+  * Cache derived TUI view data to avoid per-frame sorting and cloning
+  * Trim hot-path rendering overhead in TUI frame assembly and diff pipeline
+  * Fix scroll calculation to use actual visible process rows
+  * Fix render throttle bypass for cursor/scroll input to restore responsiveness
+  * Keep periodic refresh tick active so idle TUI stays alive
+  * Add protobuf-devel to Fedora/RHEL build prerequisites in documentation
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Mon, 07 Apr 2026 00:00:00 +0000
+
+all-smi (0.17.6-0) jammy; urgency=medium
+
+  * Bump hyper 1.9, nvml-wrapper 0.12.1, libamdgpu_top 0.11.3 and transitive deps
+  * Bump GitHub Actions to Node.js 24 compatible versions
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sun, 06 Apr 2026 00:00:00 +0000
+
+all-smi (0.17.5-0) jammy; urgency=medium
+
+  * Bump dependencies including nvml-wrapper 0.12 and fix yanked uds_windows
+  * Update tokio 1.50, chrono 0.4.44, clap 4.6, libamdgpu_top 0.11.2
+  * Update 58 transitive dependencies to latest compatible versions
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sat, 29 Mar 2026 00:00:00 +0000
+
+all-smi (0.17.4-0) jammy; urgency=medium
+
+  * Feature-gate CLI/TUI dependencies behind `cli` feature for lighter library builds
+  * Make clap, crossterm, axum, tower-http optional (activated by `cli` feature)
+  * Make hyper, hyper-util, rand optional (activated by `mock` feature)
+  * Add `--no-default-features` build check to CI
+  * Fix Furiosa RNGD support for latest SDK & driver APIs (v2026.1.0)
+  * Add dual JSON format support for Furiosa CLI (--format json / --output json)
+  * Read actual per-device DRAM usage instead of hardcoded memory constant
+  * Handle decimal temperatures from RNGD devices
+  * Cache detected JSON flag to avoid repeated failed process spawns
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sat, 29 Mar 2026 00:00:00 +0000
+
+all-smi (0.17.3-0) jammy; urgency=medium
+
+  * Fix multi-GPU process duplication by adding get_gpu_processes trait method
+  * Preserve per-device rows for multi-GPU PID attribution
+  * Prevent double-merge in local collector process collection
+  * Upgrade breaking dependencies (rand 0.10, reqwest 0.13, sysinfo 0.38, whoami 2)
+  * Fix protoc download with --fail and retry for transient errors
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Tue, 04 Mar 2026 00:00:00 +0000
+
+all-smi (0.17.2-0) jammy; urgency=medium
+
+  * Fix file descriptor leaks in Jetson, Tenstorrent, and NVIDIA readers
+  * Replace per-call System::new() with with_global_system() for consistency
+  * Follow standard pattern already used by AMD, Apple Silicon, and local collector
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sat, 08 Feb 2026 00:00:00 +0000
+
+all-smi (0.17.1-0) jammy; urgency=medium
+
+  * Fix file descriptor leak in API mode by reusing resource handles
+  * Cache Nvml handle in NvidiaGpuReader with graceful reinit on invalidation
+  * Reuse sysinfo::System instance across get_process_info() calls
+  * Create Disks instance once and refresh in-place each API metrics cycle
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sun, 08 Feb 2026 00:00:00 +0000
+
+all-smi (0.17.0-0) jammy; urgency=medium
+
+  * Add GPU process filter toggle ('f' key) to show only processes with GPU memory
+  * Improve process list sort stability using PID as secondary sort key
+  * Update status bar to indicate filter status when active
+  * Add get_storage_info() method to public library API
+  * Add StorageReader trait and LocalStorageReader implementation
+  * Export StorageInfo and StorageReader in prelude
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Mon, 13 Jan 2026 00:00:00 +0000
+
+all-smi (0.16.0-0) jammy; urgency=medium
+
+  * Add high-level AllSmi client struct with ergonomic API
+  * Add unified Error type using thiserror for library users
+  * Add prelude module for convenient imports
+  * Add comprehensive library API manual and examples
+  * Update cargo dependencies (axum, tower-http, sysinfo, regex, futures-util)
+  * Fix Launchpad offline builds with cargo vendor and .cargo/config.toml
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sat, 04 Jan 2026 00:00:00 +0000
+
+all-smi (0.15.1-0) jammy; urgency=medium
+
+  * Fix memory leak in IOReportIterator by releasing delta CFDictionaryRef
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Tue, 31 Dec 2025 00:00:00 +0000
+
+all-smi (0.15.0-0) jammy; urgency=medium
+
+  * Add Unix Domain Socket support for API mode (Linux/macOS)
+  * Add Windows CPU temperature fallback chain to handle WBEM_E_NOT_FOUND
+  * Add release profile for binary size optimization
+  * Change organization from inureyes to lablup
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Tue, 31 Dec 2025 00:00:00 +0000
+
+all-smi (0.14.0-0) jammy; urgency=medium
+
+  * Add Windows x64 build target for cross-platform support
+  * Add native macOS APIs for Apple Silicon metrics (no sudo required)
+  * Add Chassis/Node-level monitoring with per-node power and BMC metrics
+  * Expose total power metrics for Apple Silicon
+  * Optimize CPU usage by caching expensive system calls
+  * Remove legacy powermetrics implementation
+  * Update repository URLs from inureyes to lablup
+  * Fix Dockerfile for protobuf compilation and TPU support
+  * Fix Ubuntu PPA builds for Cargo.lock v4 compatibility
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Wed, 25 Dec 2025 00:00:00 +0000
+
+all-smi (0.13.1-0) jammy; urgency=medium
+
+  * Upgrade tonic to 0.14, prost to 0.14, wmi to 0.18, libloading to 0.9
+  * Upgrade tonic-build to 0.14 and optimize build dependencies
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Mon, 23 Dec 2025 00:00:00 +0000
+
+all-smi (0.13.0-0) jammy; urgency=medium
+
+  * Add comprehensive Google Cloud TPU monitoring support (v2-v7/Ironwood)
+  * Reduce CPU utilization with optimized polling and rendering
+  * Add gRPC client for TPU runtime metrics with adaptive polling
+  * Add TensorCore utilization and HLO metrics display
+  * Support multiple TPU detection methods: sysfs, PCI, PJRT C API, tpu-info CLI
+  * Add content hash-based skip rendering using FNV-1a hashing
+  * Optimize memory management with reduced buffer allocations
+  * Improve scroll speed and tab tracking for immediate re-renders
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Mon, 23 Dec 2025 00:00:00 +0000
+
+all-smi (0.12.0-0) jammy; urgency=medium
+
+  * Add Windows build support
+  * Fix AMD GPU dependencies in Dockerfile builder stage
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Sat, 07 Dec 2025 00:00:00 +0000
+
+all-smi (0.11.0-0) jammy; urgency=medium
+
+  * Add Intel Gaudi 3 AI accelerator support
+  * Add unified AI acceleration library naming for cross-platform consistency
+  * Optimize GPU/NPU readers by caching static values
+  * Unify AI accelerator reader caching patterns
+  * Add AMD GPU driver version extraction and expose in API/mock
+  * Add NVIDIA driver and CUDA version to mock server metrics
+  * Fix type mismatch in ensure_sudo_permissions_with_fallback for musl
+  * Disable AMD GPU support for musl builds to resolve linking errors
+  * Add AMD GPU development dependencies to Linux release builds
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Tue, 25 Nov 2025 00:00:00 +0000
+
+all-smi (0.10.0-0) jammy; urgency=medium
+
+  * Add AMD GPU support via ROCm/libamdgpu_top integration
+  * Comprehensive security and performance review with critical fixes
+  * Refactor data collection with Strategy pattern
+  * Enhanced parsing macros to reduce code duplication
+  * Make Tenstorrent NPU support Linux-only
+  * Organize test scripts into tests directory
+  * Add comprehensive developer documentation
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Thu, 21 Nov 2025 00:00:00 +0000
+
+all-smi (0.6.3-0) jammy; urgency=medium
+
+  * Initial release for Ubuntu 22.04 (Jammy)
+  * Multi-platform GPU monitoring support (NVIDIA, Apple Silicon, etc.)
+  * Terminal UI with tabs and scrolling
+  * Remote monitoring capabilities
+  * Prometheus metrics export
+
+ -- Jeongkyu Shin <inureyes@gmail.com>  Wed, 29 Jan 2025 00:00:00 +0000
