@@ -1,8 +1,0 @@
-[env]
-PATH = "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6\\bin;%PATH%"
-CUDA_PATH = "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6"
-WHISPER_CUDA = "1"
-LIBCLANG_PATH = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\x64\\bin"
-CUDAHOSTCXX = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\cl.exe"
-CMAKE_ARGS = "-DGGML_CUDA_FORCE_MMQ=ON -DCMAKE_CUDA_ARCHITECTURES=75"
-WHISPER_DONT_GENERATE_BINDINGS = "1"

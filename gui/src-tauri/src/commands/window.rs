@@ -1,4 +1,5 @@
 use tauri::{WebviewWindow};
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
 #[tauri::command]

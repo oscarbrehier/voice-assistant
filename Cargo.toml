@@ -1,3 +1,6 @@
 [workspace]
 members = ["engine", "gui/src-tauri"]
 resolver = "2"
+
+[patch.crates-io]
+all-smi = { path = "./all-smi" }
