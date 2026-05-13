@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use ort::session::Session;
 
-use mel_spec::fbank::{Fbank, FbankConfig};
 use crate::audio::utils::resample_to_16khz;
+use mel_spec::fbank::{Fbank, FbankConfig};
 
 pub struct EnrolmentState {
     pub current_step: usize,
@@ -16,7 +16,7 @@ impl EnrolmentState {
     pub fn new() -> Self {
         Self {
             current_step: 0,
-            max_steps: 10,
+            max_steps: 5,
             accumulated_embedding: Vec::new(),
             negative_embeddings: Vec::new(),
         }
@@ -84,7 +84,9 @@ impl SpeakerID {
     }
 
     pub fn save_profile(&self) -> anyhow::Result<()> {
-        let path = self.profile_path.as_ref()
+        let path = self
+            .profile_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No profile path configured for this speaker"))?;
 
         let reference = self
@@ -180,19 +182,11 @@ impl SpeakerID {
         let normalized: Vec<f32> = averaged.into_iter().map(|x| x / norm).collect();
 
         self.reference_embedding = Some(normalized.clone());
-
         self.negative_embeddings = state.negative_embeddings;
 
-        let data_to_save = (normalized, self.negative_embeddings.clone());
-        let encoded = bincode::serialize(&data_to_save)?;
-
-        let path = Path::new("profiles/profile_1.bin");
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if self.profile_path.is_some() {
+            self.save_profile()?;
         }
-            
-        std::fs::write(path, encoded)?;
 
         Ok(())
     }
@@ -213,6 +207,8 @@ impl SpeakerID {
         let candidate = self.extract_embedding(&resampled_data)?;
         let similarity = self.cosine_similarity(&reference, &candidate);
 
+        println!("speaker similarity: {}", similarity);
+
         Ok(similarity >= self.similarity_threshold)
     }
 
@@ -230,31 +226,35 @@ impl SpeakerID {
             .ok_or_else(|| anyhow::anyhow!("SpeakerID has no enrolled reference"))?;
 
         let candidate = self.extract_embedding(&resampled_data)?;
-
         let positive_sim = self.cosine_similarity(&reference, &candidate);
 
-        let negative_sim = if !self.negative_embeddings.is_empty() {
-            let sum: f32 = self.negative_embeddings
-                .iter()
-                .map(|neg_emb| self.cosine_similarity(neg_emb, &candidate))
-                .sum();
+        let max_negative_sim = self
+            .negative_embeddings
+            .iter()
+            .map(|n| self.cosine_similarity(n, &candidate))
+            .fold(0.0f32, |a, b| a.max(b));
 
-            sum / self.negative_embeddings.len() as f32
-        } else {
-            0.0
-        };
-
-        let margin = 0.20;
         let threshold = self.get_adaptive_threshold();
 
-        let is_positive_enough = positive_sim >= threshold;
-        let is_distinctive_from_else = (positive_sim - negative_sim) >= margin;
+        let is_positive_enough = positive_sim >= (threshold - 0.05);
 
-        let decision = is_positive_enough && is_distinctive_from_else;
+        let is_distinctive = if self.negative_embeddings.is_empty() {
+            true
+        } else {
+            if positive_sim > 0.70 {
+                true
+            } else {
+                (positive_sim + 0.15) >= max_negative_sim
+            }
+        };
 
-        self.recent_scores.push(positive_sim);
-        if self.recent_scores.len() > 100 {
-            self.recent_scores.remove(0);
+        let decision = is_positive_enough && is_distinctive;
+
+        if positive_sim > 0.5 {
+            self.recent_scores.push(positive_sim);
+            if self.recent_scores.len() > 100 {
+                self.recent_scores.remove(0);
+            }
         }
 
         Ok(decision)
@@ -263,21 +263,33 @@ impl SpeakerID {
     fn extract_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<f32>> {
         let config = FbankConfig {
             num_mel_bins: 80,
+            apply_cmn: false,
             sample_rate: 16000.0,
             frame_length_ms: 25.0,
             frame_shift_ms: 10.0,
+            energy_floor: 1.0,
             ..FbankConfig::default()
         };
+
         let fbank = Fbank::new(config);
         let features = fbank.compute(samples);
 
         let (t_dim, mel_dim) = (features.nrows(), features.ncols());
-
-        let mut standardized_data = Vec::with_capacity(t_dim * mel_dim);
-
+        
+        let mut bin_means = vec![0.0f32; mel_dim];
         for t in 0..t_dim {
             for m in 0..mel_dim {
-                standardized_data.push(features[(t, m)]);
+                bin_means[m] += features[(t, m)];
+            }
+        }
+        for m in 0..mel_dim {
+            bin_means[m] /= t_dim.max(1) as f32;
+        }
+
+        let mut standardized_data = Vec::with_capacity(t_dim * mel_dim);
+        for t in 0..t_dim {
+            for m in 0..mel_dim {
+                standardized_data.push(features[(t, m)] - bin_means[m]);
             }
         }
 
@@ -285,6 +297,7 @@ impl SpeakerID {
         let input_tensor = ort::value::Value::from_array(array_3d)?;
 
         let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
+        
         let output_value = outputs
             .get("embs")
             .ok_or_else(|| anyhow::anyhow!("No embs"))?;
@@ -293,7 +306,7 @@ impl SpeakerID {
         let mut emb = extracted_slice.to_vec();
         let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
         emb.iter_mut().for_each(|x| *x /= norm);
-
+        
         Ok(emb)
     }
 

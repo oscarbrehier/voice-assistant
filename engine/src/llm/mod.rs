@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    llm::{history::ConversationHistory, mistral::call_mistral_with_tools},
-    memory::{MemoryManager, MemoryType},
-    state::SharedContext,
+    config::Config, llm::{history::ConversationHistory, mistral::call_mistral_with_tools}, memory::{MemoryManager, MemoryType}, state::SharedContext
 };
 
 pub mod history;
@@ -105,9 +103,12 @@ impl LLMEngine {
     pub fn new<P: AsRef<Path>>(
         prompt_path: P,
         memory: Arc<std::sync::Mutex<MemoryManager>>,
+        config: Config
     ) -> anyhow::Result<Self> {
         let system_prompt_template = fs::read_to_string(prompt_path)
             .expect("System prompt template file not found in config");
+
+        let system_prompt_template = system_prompt_template.replace("{{name}}", &config.name);
 
         let history = ConversationHistory::new();
 
@@ -168,6 +169,8 @@ impl LLMEngine {
             .replace("{{vitals}}", &vitals_str)
             .replace("{{core_identity}}", &self.core_identity_cache)
             .replace("{{retrieved_memories}}", &situational_str);
+
+        println!("{}", final_system_prompt);
 
         self.history.add_user_input(text);
 
@@ -241,7 +244,7 @@ impl LLMEngine {
             "get_time" => {
                 use chrono::Local;
                 let now = Local::now();
-                Ok(now.format("%I:%M %p").to_string())
+                Ok(now.format("%R").to_string())
             }
             "search_memories" => {
                 let query = args["query"]

@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub name: String,
 }

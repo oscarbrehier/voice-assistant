@@ -346,7 +346,12 @@ pub fn run_vad_loop(
 
                 if updated_state == State::Recording as u8 && circular_buffer.full {
                     let wake_word_audio = circular_buffer.get_all();
-                    let _ = tx.send(Packet::WakeWordCheck(wake_word_audio));
+                    let _ = tx.send(Packet::WakeWordCheck(wake_word_audio.clone()));
+
+                    if current_state == State::Active {
+                        speech_buffer.extend(wake_word_audio);
+                    }
+                    
                     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
                 }
 

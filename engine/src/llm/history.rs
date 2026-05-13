@@ -16,29 +16,6 @@ impl ConversationHistory {
         }
     }
 
-    // pub fn build_history_string(&mut self) -> Vec<Value> {
-    //     let max_history_turns = 10;
-
-    //     while self.messages.len() > max_history_turns {
-    //         if self.messages.len() >= 2 {
-    //             self.messages.remove(0);
-    //             self.messages.remove(0);
-    //         } else {
-    //             self.messages.remove(0);
-    //         }
-    //     }
-
-    //     self.messages
-    //         .iter()
-    //         .map(|m| {
-    //             serde_json::json!({
-    //                 "role": m.role,
-    //                 "content": m.content
-    //             })
-    //         })
-    //         .collect()
-    // }
-
     pub fn add_user_input(&mut self, text: &str) {
         self.messages.push(Message::User { content: text.to_string() });
         self.trim_if_needed();

@@ -21,11 +21,11 @@ class STTService:
                 language="en",
                 beam_size=5,
                 temperature=0.0,
-                compression_ratio_threshold=2.4,
+                condition_on_previous_text=False,
+                compression_ratio_threshold=1.8,
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6,
-                condition_on_previous_text=True,
-                vad_filter=False,
+                vad_filter=True,
                 word_timestamps=False
             )
             
@@ -101,7 +101,7 @@ class STTService:
 if __name__ == "__main__":
     try:
         # service = STTService(model="distil-medium.en", device="cuda")
-        service = STTService(model="base.en", device="cuda")
+        service = STTService(model="distil-small.en", device="cuda")
         service.run()
     except Exception as e:
         print(f"error: {e}", file=sys.stderr, flush=True)

@@ -1,5 +1,6 @@
 use std::{path::PathBuf};
 use engine::{EnginePaths, start_engine};
+use mel_spec::fbank::FbankConfig;
 use tokio::signal;
 
 #[tokio::main]
@@ -9,6 +10,8 @@ async fn main() -> anyhow::Result<()> {
         script_dir: PathBuf::from("engine/python"),
     };
 
+    println!("{:?}", FbankConfig::default());
+    
     match start_engine(paths, Some(19)).await {
         Ok((tx, _stream)) => {
             println!("engile started");

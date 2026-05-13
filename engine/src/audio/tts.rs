@@ -110,6 +110,8 @@ pub async fn run_self_calibration(
     tts: &TTSService,
     tx: &broadcast::Sender<Packet>,
 ) -> anyhow::Result<()> {
+    State::broadcast(State::Calibrating, &ctx.engine_state, tx);
+    
     let calibration_scripts = [
         "I am calibrating my voice recognition parameters.",
         "Testing the acoustic environment for echo cancellation.",
@@ -117,8 +119,6 @@ pub async fn run_self_calibration(
         "Finalizing the negative embedding database for authorized access.",
         "The system is now learning to ignore its own output.",
     ];
-
-    State::broadcast(State::Calibrating, &ctx.engine_state, tx);
 
     for script in calibration_scripts {
         tts.speak_async(script, ctx.clone(), tx, Some(State::Calibrating), true)

@@ -11,7 +11,7 @@ use crate::{
     ActiveGuard, State,
     audio::{
         Packet,
-        stt::{stt::STT, stt_service::STTService},
+        stt::stt_service::STTService,
         tts::{TTSService, run_self_calibration},
         utils::resample_to_16khz,
     },
@@ -23,7 +23,7 @@ use crate::{
 };
 
 pub struct WorkerContext {
-    pub stt: STT,
+    pub stt: STTService,
     pub tts: TTSService,
     pub command_config: CommandConfig,
     pub llm_engine: LLMEngine,
@@ -35,7 +35,7 @@ pub struct WorkerContext {
 
 async fn get_transcription(ctx: &mut WorkerContext, data: &[f32]) -> Option<String> {
     let resampled = resample_to_16khz(&data, ctx.sample_rate);
-    match ctx.stt.transcribe(&resampled) {
+    match ctx.stt.transcribe(&resampled).await {
         Ok(data) => {
             let trimmed = data.trim().to_lowercase();
             if trimmed.is_empty() {
@@ -100,7 +100,9 @@ async fn process_speech_logic(
             .await
         {
             Ok(response) => {
-                let _ = ctx.tts.speak(&response, ctx.global_ctx.clone(), &tx, None, false);
+                let _ = ctx
+                    .tts
+                    .speak(&response, ctx.global_ctx.clone(), &tx, None, false);
             }
             Err(e) => eprintln!("Failed to generate: {e}"),
         }
@@ -119,11 +121,11 @@ pub async fn handle_enrollment(
         "Hey assistant, set a timer for fifteen minutes and remind me to check the oven before it burns.",
         "I'm currently integrating several different modules into this Rust project to make everything run smoothly and efficiently.",
         "Confirm authorization now. Everything looks good on my end, so let's get started with the process.",
-        "Beautiful azure skies stretched endlessly above the mountainous terrain, while golden sunlight filtered through scattered clouds.",
-        "Technology evolves rapidly, but human creativity and intuition remain irreplaceable in solving complex problems.",
-        "Please schedule a meeting for Thursday afternoon and send the presentation files to everyone on the team.",
-        "The experimental prototype exceeded expectations during testing, demonstrating both reliability and exceptional performance metrics.",
-        "Listening carefully to diverse perspectives helps us understand nuanced situations and make better informed decisions together.",
+        // "Beautiful azure skies stretched endlessly above the mountainous terrain, while golden sunlight filtered through scattered clouds.",
+        // "Technology evolves rapidly, but human creativity and intuition remain irreplaceable in solving complex problems.",
+        // "Please schedule a meeting for Thursday afternoon and send the presentation files to everyone on the team.",
+        // "The experimental prototype exceeded expectations during testing, demonstrating both reliability and exceptional performance metrics.",
+        // "Listening carefully to diverse perspectives helps us understand nuanced situations and make better informed decisions together.",
     ];
 
     let step = ctx
@@ -160,6 +162,8 @@ pub async fn handle_enrollment(
         match speaker.add_enrollment_sample(&resampled_data) {
             Ok(is_complete) => {
                 if is_complete {
+                    State::broadcast(State::Calibrating, &ctx.global_ctx.engine_state, tx);
+
                     let _ = ctx.tts.speak(
                         "Voice profile saved successfully. Now, please stay quiet while I calibrate my own voice.",
                         ctx.global_ctx.clone(),
@@ -252,11 +256,15 @@ pub fn spawn_transcription_worker(
                             let resampled = resample_to_16khz(&data, ctx.sample_rate);
 
                             let mut speaker = ctx.global_ctx.speaker.write();
-                            if let Err(e) = speaker.add_negative_sample(&resampled) {
-                                eprintln!("Failed to add negative sample: {e}");
-                            }
+                            match speaker.add_negative_sample(&resampled) {
+                                Ok(_) => println!("Added negative sample"),
+                                Err(e) => eprintln!("Failed to add negative sample: {e}"),
+                            };
 
-                            let _ = speaker.save_profile();
+                            if let Err(e) = speaker.save_profile() {
+                                eprintln!("Failed to save speaker profile with negative embeddings: {e}");
+                            };
+                            
                             continue;
                         }
 
@@ -309,18 +317,30 @@ pub fn spawn_transcription_worker(
                             }
                         }
 
-                        process_speech_logic(transcription, &mut ctx, &tx, &assistant_active).await;
+                        let wake_word = ctx.config.name.to_lowercase();
+                        let lower_t = transcription.to_lowercase();
+
+                        let clean_transcript = if let Some(index) = lower_t.find(&wake_word) {
+                            lower_t[index + wake_word.len()..].trim().to_string()
+                        } else {
+                            lower_t.trim().to_string()
+                        };
+
+                        if clean_transcript.is_empty() {
+                            continue;
+                        }
+
+                        process_speech_logic(clean_transcript, &mut ctx, &tx, &assistant_active)
+                            .await;
                     }
                 }
                 Packet::WakeWordCheck(data) => {
                     if let Some(transcription) = get_transcription(&mut ctx, &data).await {
                         println!("WAKE WORD CHECK: {transcription}");
+                        let wake_word = ctx.config.name.to_lowercase();
 
-                        let has_wake_word = transcription.contains(&ctx.config.name);
-
-                        println!("has wake word: {}", has_wake_word);
-
-                        if has_wake_word {
+                        if transcription.contains(&wake_word) {
+                            println!("wake word detected");
                             State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
                         }
                     }
