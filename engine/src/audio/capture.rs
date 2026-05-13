@@ -269,6 +269,12 @@ pub fn run_vad_loop(
             if last_speech_instant.elapsed() > timeout {
                 State::broadcast(State::Idle, &ctx.engine_state, &tx);
             }
+        }   
+
+        if current_state == State::Recording {
+            if last_speech_instant.elapsed() > Duration::from_secs(5) {
+                State::broadcast(State::Idle, &ctx.engine_state, &tx);
+            }
         }
 
         if queue.len() > (vad_chunk_size as f32 * 1.5) as usize {
@@ -347,15 +353,12 @@ pub fn run_vad_loop(
                 if updated_state == State::Recording as u8 && circular_buffer.full {
                     let wake_word_audio = circular_buffer.get_all();
                     let _ = tx.send(Packet::WakeWordCheck(wake_word_audio.clone()));
-
-                    if current_state == State::Active {
-                        speech_buffer.extend(wake_word_audio);
-                    }
                     
                     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
                 }
 
                 let is_collecting_speech = updated_state == State::Active as u8
+                    || updated_state == State::Recording as u8
                     || updated_state == State::Enrolling as u8
                     || updated_state == State::Calibrating as u8;
 
@@ -378,10 +381,6 @@ pub fn run_vad_loop(
 
                     if silence_counter >= silence_threshold_chunks {
                         let _ = tx.send(Packet::Speech(std::mem::take(&mut speech_buffer)));
-
-                        if current_state == State::Recording {
-                            State::broadcast(State::Idle, &ctx.engine_state, &tx);
-                        }
 
                         silence_counter = 0;
                     } else {
