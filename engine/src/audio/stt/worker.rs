@@ -94,8 +94,7 @@ async fn process_speech_logic(
                 &trimmed,
                 &ctx.global_ctx,
                 core_identity,
-                relevant_memories,
-                tools,
+                relevant_memories
             )
             .await
         {

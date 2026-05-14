@@ -44,3 +44,4 @@ mel_spec = "0.3.4"
 parking_lot = "0.12.5"
 nix = { version = "0.31.3", features = ["signal"] }
 all-smi = "0.20.1"
+async-trait = "0.1.89"

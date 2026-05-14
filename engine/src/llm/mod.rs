@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    config::Config, llm::{history::ConversationHistory, mistral::call_mistral_with_tools}, memory::{MemoryManager, MemoryType}, state::SharedContext
+    config::Config, llm::{history::ConversationHistory, mistral::call_mistral_with_tools, tools::{ToolContext, ToolRegistry, time::GetTimeTool}}, memory::{MemoryManager, MemoryType}, state::SharedContext
 };
 
 pub mod history;
 pub mod mistral;
+pub mod tools;
 
 pub struct LLMEngine {
     history: ConversationHistory,
@@ -17,6 +18,7 @@ pub struct LLMEngine {
     core_identity_cache: String,
     pub needs_identity_refresh: bool,
     memory: Arc<std::sync::Mutex<MemoryManager>>,
+    tools: ToolRegistry
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -121,12 +123,16 @@ impl LLMEngine {
 
         println!("CORE IDENTITY CACHE (NEW): {}", core_identity_cache);
 
+        let mut tools = ToolRegistry::new();
+        tools.register(GetTimeTool);
+        
         Ok(Self {
             history,
             system_prompt_template,
             core_identity_cache,
             needs_identity_refresh: false,
             memory,
+            tools,
         })
     }
 
@@ -137,7 +143,6 @@ impl LLMEngine {
         global_ctx: &SharedContext,
         core_identity: Vec<String>,
         relevant_memories: Vec<String>,
-        tools: Vec<Tool>,
     ) -> anyhow::Result<String> {
         if !core_identity.is_empty() {
             self.core_identity_cache = core_identity.join("\n");
@@ -170,19 +175,17 @@ impl LLMEngine {
             .replace("{{core_identity}}", &self.core_identity_cache)
             .replace("{{retrieved_memories}}", &situational_str);
 
-        println!("{}", final_system_prompt);
-
         self.history.add_user_input(text);
 
+        let tool_defs = self.tools.definitions();
+        
         let max_iterations = 5;
 
-        println!("text: {}", text);
-
-        for iteration in 0..max_iterations {
+        for _iteration in 0..max_iterations {
             let response = call_mistral_with_tools(
                 final_system_prompt.clone(),
                 &mut self.history.messages,
-                tools.clone(),
+                tool_defs.clone(),
             )
             .await?;
 
@@ -238,90 +241,105 @@ impl LLMEngine {
         tool_call: &ToolCall,
         global_ctx: &SharedContext,
     ) -> anyhow::Result<String> {
+        let tool = self.tools.get(&tool_call.function.name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", tool_call.function.name))?;
+
         let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
+        let ctx = ToolContext {
+            global_ctx,
+            memory: Arc::clone(&self.memory)
+        };
 
-        match tool_call.function.name.as_str() {
-            "get_time" => {
-                use chrono::Local;
-                let now = Local::now();
-                Ok(now.format("%R").to_string())
-            }
-            "search_memories" => {
-                let query = args["query"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
+        let outcome = tool.execute(args, &ctx).await?;
 
-                let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(3) as usize;
-
-                let results = {
-                    let lock = self
-                        .memory
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-                    lock.search(query, Some(limit))?
-                };
-
-                if results.is_empty() {
-                    Ok(format!("No memories found related to '{}'", query))
-                } else {
-                    let formatted = results
-                        .iter()
-                        .map(|(key, value)| format!("{}: {}", key, value))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    Ok(formatted)
-                }
-            }
-            "query_memory" => {
-                let query = args["key"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing key"))?;
-
-                let result = {
-                    let lock = self
-                        .memory
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-                    lock.get(query)?
-                };
-
-                Ok(result)
-            }
-            "save_memory" => {
-                let key = args["key"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing key"))?;
-                let value = args["value"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing value"))?;
-                let memory_type_str = args["memory_type"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing memory_type"))?;
-
-                let memory_type = match memory_type_str {
-                    "identity" => MemoryType::Identity,
-                    "situational" => MemoryType::Situational,
-                    _ => anyhow::bail!("Invalid memory_type: must be 'identiy' or 'situational'"),
-                };
-
-                {
-                    let lock = self
-                        .memory
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-                    lock.save(key, value, memory_type.clone())?
-                };
-
-                if memory_type == MemoryType::Identity {
-                    self.needs_identity_refresh = true;
-                }
-
-                Ok(format!(
-                    "Saved {:?} memory: {} = {}",
-                    memory_type, key, value
-                ))
-            }
-            _ => Err(anyhow::anyhow!("Unknow tool: {}", tool_call.function.name)),
+        if outcome.needs_identity_refresh {
+            self.needs_identity_refresh = true;
         }
+
+        Ok(outcome.result)
+        
+        // match tool_call.function.name.as_str() {
+        //     "get_time" => {
+        //         use chrono::Local;
+        //         let now = Local::now();
+        //         Ok(now.format("%R").to_string())
+        //     }
+        //     "search_memories" => {
+        //         let query = args["query"]
+        //             .as_str()
+        //             .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
+
+        //         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(3) as usize;
+
+        //         let results = {
+        //             let lock = self
+        //                 .memory
+        //                 .lock()
+        //                 .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
+        //             lock.search(query, Some(limit))?
+        //         };
+
+        //         if results.is_empty() {
+        //             Ok(format!("No memories found related to '{}'", query))
+        //         } else {
+        //             let formatted = results
+        //                 .iter()
+        //                 .map(|(key, value)| format!("{}: {}", key, value))
+        //                 .collect::<Vec<_>>()
+        //                 .join("\n");
+        //             Ok(formatted)
+        //         }
+        //     }
+        //     "query_memory" => {
+        //         let query = args["key"]
+        //             .as_str()
+        //             .ok_or_else(|| anyhow::anyhow!("Missing key"))?;
+
+        //         let result = {
+        //             let lock = self
+        //                 .memory
+        //                 .lock()
+        //                 .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
+        //             lock.get(query)?
+        //         };
+
+        //         Ok(result)
+        //     }
+        //     "save_memory" => {
+        //         let key = args["key"]
+        //             .as_str()
+        //             .ok_or_else(|| anyhow::anyhow!("Missing key"))?;
+        //         let value = args["value"]
+        //             .as_str()
+        //             .ok_or_else(|| anyhow::anyhow!("Missing value"))?;
+        //         let memory_type_str = args["memory_type"]
+        //             .as_str()
+        //             .ok_or_else(|| anyhow::anyhow!("Missing memory_type"))?;
+
+        //         let memory_type = match memory_type_str {
+        //             "identity" => MemoryType::Identity,
+        //             "situational" => MemoryType::Situational,
+        //             _ => anyhow::bail!("Invalid memory_type: must be 'identiy' or 'situational'"),
+        //         };
+
+        //         {
+        //             let lock = self
+        //                 .memory
+        //                 .lock()
+        //                 .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
+        //             lock.save(key, value, memory_type.clone())?
+        //         };
+
+        //         if memory_type == MemoryType::Identity {
+        //             self.needs_identity_refresh = true;
+        //         }
+
+        //         Ok(format!(
+        //             "Saved {:?} memory: {} = {}",
+        //             memory_type, key, value
+        //         ))
+        //     }
+        //     _ => Err(anyhow::anyhow!("Unknow tool: {}", tool_call.function.name)),
+        // }
     }
 }

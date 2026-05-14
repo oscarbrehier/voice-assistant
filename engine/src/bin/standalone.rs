@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("{:?}", FbankConfig::default());
     
-    match start_engine(paths, Some(19)).await {
+    match start_engine(paths, Some(17)).await {
         Ok((tx, _stream)) => {
             println!("engile started");
 

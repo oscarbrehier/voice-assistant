@@ -1,4 +1,5 @@
 use anyhow::Context;
+use chrono::Local;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -51,7 +52,7 @@ impl STTService {
 
         let total_start = Instant::now();
 
-        println!("Starting transcription for {} samples", audio.len());
+        println!("[{}] Starting transcription for {} samples",  Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), audio.len());
 
         match self.process.try_wait() {
             Ok(Some(status)) => {
@@ -92,7 +93,8 @@ impl STTService {
 
         let total_time = total_start.elapsed();
         println!(
-            "Transcription complete: '{}' ({} samples in {:?})",
+            "[{}] Transcription complete: '{}' ({} samples in {:?})",
+            Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
             result.trim(),
             audio.len(),
             total_time
