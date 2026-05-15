@@ -1,6 +1,6 @@
 use tokio::sync::broadcast;
 
-use crate::{Packet, State, audio::tts::{TTSService, run_self_calibration}, state::SharedContext};
+use crate::{Packet, State, audio::{enrollment::run_self_calibration, tts::TTSService}, state::SharedContext};
 
 pub async fn run_startup_verifications(
     ctx: SharedContext,

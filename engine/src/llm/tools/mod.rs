@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use crate::{llm::FunctionDefinition, memory::MemoryManager, state::SharedContext};
 
 pub mod time;
+pub mod memory;
 
 pub struct ToolContext<'a> {
     pub global_ctx: &'a SharedContext,

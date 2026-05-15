@@ -104,29 +104,3 @@ impl TTSService {
         Ok(())
     }
 }
-
-pub async fn run_self_calibration(
-    ctx: SharedContext,
-    tts: &TTSService,
-    tx: &broadcast::Sender<Packet>,
-) -> anyhow::Result<()> {
-    State::broadcast(State::Calibrating, &ctx.engine_state, tx);
-    
-    let calibration_scripts = [
-        "I am calibrating my voice recognition parameters.",
-        "Testing the acoustic environment for echo cancellation.",
-        "Generating synthetic voice patterns to improve authorization accuracy.",
-        "Finalizing the negative embedding database for authorized access.",
-        "The system is now learning to ignore its own output.",
-    ];
-
-    for script in calibration_scripts {
-        tts.speak_async(script, ctx.clone(), tx, Some(State::Calibrating), true)
-            .await?;
-        tokio::time::sleep(Duration::from_millis(800)).await;
-    }
-
-    State::broadcast(State::Idle, &ctx.engine_state, tx);
-
-    Ok(())
-}

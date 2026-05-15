@@ -1,11 +1,11 @@
-use std::{fs, path::Path, sync::Arc};
+use std::{fs, path::{Path, PathBuf}, sync::{Arc, Mutex}};
 
-use anyhow::Ok;
+use anyhow::{Context, Ok};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    config::Config, llm::{history::ConversationHistory, mistral::call_mistral_with_tools, tools::{ToolContext, ToolRegistry, time::GetTimeTool}}, memory::{MemoryManager, MemoryType}, state::SharedContext
+    Opt, config::Config, llm::{history::ConversationHistory, mistral::{call_mistral_proactive, call_mistral_with_tools}, tools::{ToolContext, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, time::GetTimeTool}}, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::Urgency
 };
 
 pub mod history;
@@ -15,6 +15,7 @@ pub mod tools;
 pub struct LLMEngine {
     history: ConversationHistory,
     system_prompt_template: String,
+    proactive_prompt_template: String,
     core_identity_cache: String,
     pub needs_identity_refresh: bool,
     memory: Arc<std::sync::Mutex<MemoryManager>>,
@@ -84,6 +85,11 @@ pub struct MistralRequest {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct MistralResponse {
+    
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct MistralToolResponse {
     pub id: String,
     pub choices: Vec<Choice>,
 }
@@ -101,34 +107,32 @@ pub struct ResponseMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
+fn load_prompt(dir: &Path, filename: &str, name: &str) -> anyhow::Result<String> {
+    let path = dir.join(filename);
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read prompt file: {}", path.display()))?;
+    Ok(content.replace("{{name}}", name))
+}
+
 impl LLMEngine {
     pub fn new<P: AsRef<Path>>(
-        prompt_path: P,
+        prompts_dir: P,
         memory: Arc<std::sync::Mutex<MemoryManager>>,
         config: Config
     ) -> anyhow::Result<Self> {
-        let system_prompt_template = fs::read_to_string(prompt_path)
-            .expect("System prompt template file not found in config");
 
-        let system_prompt_template = system_prompt_template.replace("{{name}}", &config.name);
+        let prompts_dir = prompts_dir.as_ref().to_path_buf();
+        
+        let system_prompt_template = load_prompt(&prompts_dir, "system_prompt.md", &config.name)?;
+        let proactive_prompt_template = load_prompt(&prompts_dir, "proactive_prompt.md", &config.name)?;
 
-        let history = ConversationHistory::new();
-
-        let core_identity_cache = {
-            let m = memory
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-            m.get_core_identity()?.join("\n")
-        };
-
-        println!("CORE IDENTITY CACHE (NEW): {}", core_identity_cache);
-
-        let mut tools = ToolRegistry::new();
-        tools.register(GetTimeTool);
+        let core_identity_cache = Self::load_core_identity(&memory)?;
+        let tools = Self::build_tool_registry();
         
         Ok(Self {
-            history,
+            history:  ConversationHistory::new(),
             system_prompt_template,
+            proactive_prompt_template,
             core_identity_cache,
             needs_identity_refresh: false,
             memory,
@@ -136,6 +140,23 @@ impl LLMEngine {
         })
     }
 
+    fn load_core_identity(memory: &Arc<Mutex<MemoryManager>>) -> anyhow::Result<String> {
+        let lock = memory.lock()
+            .map_err(|_| anyhow::anyhow!("Memory mutex poisoned"))?;
+        Ok(lock.get_core_identity()?.join("\n"))
+    }
+
+    fn build_tool_registry() -> ToolRegistry {
+        let mut tools = ToolRegistry::new();
+
+        tools.register(GetTimeTool);
+        tools.register(SearchMemoryTool);
+        tools.register(QueryMemoryTool);
+        tools.register(SaveMemoryTool);
+
+        tools
+    }
+    
     #[instrument(skip(self, text, global_ctx, core_identity, relevant_memories), fields(input = %text))]
     pub async fn generate(
         &mut self,
@@ -255,91 +276,38 @@ impl LLMEngine {
         if outcome.needs_identity_refresh {
             self.needs_identity_refresh = true;
         }
-
-        Ok(outcome.result)
         
-        // match tool_call.function.name.as_str() {
-        //     "get_time" => {
-        //         use chrono::Local;
-        //         let now = Local::now();
-        //         Ok(now.format("%R").to_string())
-        //     }
-        //     "search_memories" => {
-        //         let query = args["query"]
-        //             .as_str()
-        //             .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
+        Ok(outcome.result)
+    }
+    
+    pub async fn generate_proactive(&self, context: &str, urgency: &Urgency) -> anyhow::Result<Option<String>> {
 
-        //         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(3) as usize;
+        let urgency_guidance = Self::urgency_guidance(urgency);
+        
+        let prompt = self.proactive_prompt_template
+            .replace("{{context}}", context)
+            .replace("{{urgency_guidance}}", urgency_guidance);
 
-        //         let results = {
-        //             let lock = self
-        //                 .memory
-        //                 .lock()
-        //                 .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-        //             lock.search(query, Some(limit))?
-        //         };
+        let response = call_mistral_proactive(prompt).await?;
+        let trimmed = response
+            .trim()
+            .to_lowercase();
+        
+        if response.is_empty() || trimmed == "(silent)" || trimmed.starts_with("no response") {
+            return Ok(None);
+        }
 
-        //         if results.is_empty() {
-        //             Ok(format!("No memories found related to '{}'", query))
-        //         } else {
-        //             let formatted = results
-        //                 .iter()
-        //                 .map(|(key, value)| format!("{}: {}", key, value))
-        //                 .collect::<Vec<_>>()
-        //                 .join("\n");
-        //             Ok(formatted)
-        //         }
-        //     }
-        //     "query_memory" => {
-        //         let query = args["key"]
-        //             .as_str()
-        //             .ok_or_else(|| anyhow::anyhow!("Missing key"))?;
+        // TODO: implement interaction record (history + message)
 
-        //         let result = {
-        //             let lock = self
-        //                 .memory
-        //                 .lock()
-        //                 .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-        //             lock.get(query)?
-        //         };
+        Ok(Some(response))
+    }
 
-        //         Ok(result)
-        //     }
-        //     "save_memory" => {
-        //         let key = args["key"]
-        //             .as_str()
-        //             .ok_or_else(|| anyhow::anyhow!("Missing key"))?;
-        //         let value = args["value"]
-        //             .as_str()
-        //             .ok_or_else(|| anyhow::anyhow!("Missing value"))?;
-        //         let memory_type_str = args["memory_type"]
-        //             .as_str()
-        //             .ok_or_else(|| anyhow::anyhow!("Missing memory_type"))?;
-
-        //         let memory_type = match memory_type_str {
-        //             "identity" => MemoryType::Identity,
-        //             "situational" => MemoryType::Situational,
-        //             _ => anyhow::bail!("Invalid memory_type: must be 'identiy' or 'situational'"),
-        //         };
-
-        //         {
-        //             let lock = self
-        //                 .memory
-        //                 .lock()
-        //                 .map_err(|_| anyhow::anyhow!("Lock poisonned"))?;
-        //             lock.save(key, value, memory_type.clone())?
-        //         };
-
-        //         if memory_type == MemoryType::Identity {
-        //             self.needs_identity_refresh = true;
-        //         }
-
-        //         Ok(format!(
-        //             "Saved {:?} memory: {} = {}",
-        //             memory_type, key, value
-        //         ))
-        //     }
-        //     _ => Err(anyhow::anyhow!("Unknow tool: {}", tool_call.function.name)),
-        // }
+    fn urgency_guidance(urgency: &Urgency) -> &'static str {
+        match urgency {
+            Urgency::Low => "Low urgency — only speak if you have something genuinely interesting or useful to say. Silence is usually the better choice. Be casual.",
+            Urgency::Normal => "Normal urgency — speak if it's helpful, stay quiet if it's not actionable. Conversational tone.",
+            Urgency::High => "High urgency — likely worth mentioning. Be direct but calm.",
+            Urgency::Critical => "Critical — speak. The user needs to know now. Be clear and immediate, not casual.",
+        }
     }
 }

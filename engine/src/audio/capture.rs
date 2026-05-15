@@ -13,16 +13,12 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 use num_traits::FromPrimitive;
-use ort::environment::current;
 use tokio::sync::broadcast;
 
 use crate::{
     State,
-    audio::{
-        Packet,
-        utils::{BiquadFilter, has_speech, to_mono},
-    },
-    state::SharedContext,
+    audio::utils::{BiquadFilter, has_speech, to_mono},
+    state::SharedContext, worker::Packet,
 };
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;

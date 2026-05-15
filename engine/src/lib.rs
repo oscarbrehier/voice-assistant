@@ -10,7 +10,7 @@ use clap::Parser;
 use cpal::Stream;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -18,9 +18,7 @@ use crate::{
     audio::{
         capture::{init_audio_capture, run_vad_loop},
         onboarding, setup_audio_device,
-        stt::{
-            stt_service::STTService, worker::{WorkerContext, spawn_transcription_worker}
-        },
+        stt::stt_service::STTService,
         tts::TTSService,
         voice::SpeakerID,
     },
@@ -28,7 +26,7 @@ use crate::{
     config::Config,
     llm::LLMEngine,
     memory::MemoryManager,
-    state::{GlobalContext, SharedContext, Vitals},
+    state::{GlobalContext, SharedContext, Vitals}, worker::{Packet, WorkerContext, spawn_transcription_worker},
 };
 
 pub mod actions;
@@ -38,9 +36,9 @@ mod config;
 mod llm;
 mod memory;
 pub mod monitor;
+mod proactive;
 pub mod state;
-
-pub use audio::Packet;
+mod worker;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -153,7 +151,7 @@ pub async fn start_engine(
         telemetry: RwLock::new(Vitals::default()),
         audio_player: RwLock::new(None),
         engine_state: Arc::new(AtomicU8::new(State::Idle as u8)),
-        speaker: RwLock::new(speaker_id)
+        speaker: RwLock::new(speaker_id),
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
@@ -167,7 +165,7 @@ pub async fn start_engine(
         monitor::run_monitoring_loop(monitor_state).await;
     });
 
-    let llm_engine = LLMEngine::new(prompt_path, Arc::clone(&shared_memory), config.clone())?;
+    let llm_engine = LLMEngine::new(paths.config_dir, Arc::clone(&shared_memory), config.clone())?;
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
@@ -233,6 +231,13 @@ pub async fn start_engine(
         worker_context,
         assistant_active_worker,
     );
+
+    let proactive_ctx = shared_context.clone();
+    let proactive_tx = tx_internal.clone();
+
+    tokio::spawn(async move {
+        proactive::run_loop(proactive_ctx, proactive_tx).await;
+    });
 
     let engine_tx = tx_internal.clone();
     let vad_context = shared_context.clone();

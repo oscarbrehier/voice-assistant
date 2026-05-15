@@ -5,13 +5,21 @@ use serde::Serialize;
 
 use crate::{audio::voice::SpeakerID, memory::MemoryManager};
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ProcessSnapshot {
+    pub name: String,
+    pub cpu_percent: f32,
+    pub memory_mb: u64
+}
+
 #[derive(Default, Serialize, Clone)]
 pub struct Vitals {
     pub cpu_load: f64,
     pub cpu_temperature: Option<u32>,
     pub ram_used_gb: f64,
     pub ram_total_gb: f64,
-    pub timestamp: String
+    pub timestamp: String,
+    pub top_processes: Vec<ProcessSnapshot>
 }
 
 pub struct GlobalContext {
