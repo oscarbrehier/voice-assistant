@@ -3,7 +3,7 @@ import asyncio
 import edge_tts
 
 async def speak(text):
-    voice = "en-US-AvaNeural"
+    voice = "en-US-AvaMultilingualNeural"
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save("output.mp3")
     

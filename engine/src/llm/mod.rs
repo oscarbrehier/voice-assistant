@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    Opt, config::Config, llm::{history::ConversationHistory, mistral::{call_mistral_proactive, call_mistral_with_tools}, tools::{ToolContext, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, time::GetTimeTool}}, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::Urgency
+    Opt, config::Config, llm::{history::ConversationHistory, mistral::{call_mistral_stateless, call_mistral_with_tools}, tools::{ToolContext, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, time::GetTimeTool}}, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::Urgency
 };
 
 pub mod history;
@@ -107,7 +107,7 @@ pub struct ResponseMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
-fn load_prompt(dir: &Path, filename: &str, name: &str) -> anyhow::Result<String> {
+pub fn load_prompt(dir: &Path, filename: &str, name: &str) -> anyhow::Result<String> {
     let path = dir.join(filename);
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read prompt file: {}", path.display()))?;
@@ -288,7 +288,7 @@ impl LLMEngine {
             .replace("{{context}}", context)
             .replace("{{urgency_guidance}}", urgency_guidance);
 
-        let response = call_mistral_proactive(prompt).await?;
+        let response = call_mistral_stateless(prompt, "proceed".into()).await?;
         let trimmed = response
             .trim()
             .to_lowercase();

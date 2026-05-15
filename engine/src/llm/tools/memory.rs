@@ -62,7 +62,7 @@ impl Tool for SaveMemoryTool {
         let memory_type = match memory_type_str {
             "identity" => MemoryType::Identity,
             "situational" => MemoryType::Situational,
-            _ => anyhow::bail!("Invalid memory_type: must be 'identiy' or 'situational'"),
+            _ => anyhow::bail!("Invalid memory_type: must be 'identity' or 'situational'"),
         };
 
         {

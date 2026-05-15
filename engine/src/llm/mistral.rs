@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::llm::{Message, MistralRequest, MistralToolResponse, Tool};
 
-pub async fn call_mistral_proactive(system_prompt: String) -> anyhow::Result<String> {
+pub async fn call_mistral_stateless(system_prompt: String, message: String) -> anyhow::Result<String> {
     let client = Client::new();
 
     let mistral_api_key: String =
@@ -17,7 +17,7 @@ pub async fn call_mistral_proactive(system_prompt: String) -> anyhow::Result<Str
             "model": "ministral-8b-latest".to_string(),
             "messages": [
                 {"role": "system", "content": system_prompt },
-                {"role": "user", "content": "proceed".to_string() }
+                {"role": "user", "content": message }
             ]
         }))
         .send()

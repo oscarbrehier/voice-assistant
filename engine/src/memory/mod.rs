@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use chrono::{DateTime, Local};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,11 @@ impl MemoryManager {
                 );
                 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                     key, value, content='memories'
+                );
+                CREATE TABLE IF NOT EXISTS engine_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
 
                 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
@@ -189,5 +195,48 @@ impl MemoryManager {
             .collect::<Result<Vec<(String, String)>, rusqlite::Error>>()?;
 
         Ok(relevant)
+    }
+
+    pub fn state_get(&self, key: &str) -> anyhow::Result<Option<String>> {
+        match self.conn.query_row(
+            "SELECT value FROM engine_state WHERE key = ?",
+            rusqlite::params![key],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn state_set(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        let now = Local::now().to_rfc3339();
+        
+        self.conn.execute(
+            "INSERT INTO engine_state (key, value, updated_at) 
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET 
+                value = excluded.value,
+                updated_at = excluded.updated_at",
+            params![key, value, now],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn state_get_timestamp(&self, key: &str) -> anyhow::Result<Option<DateTime<Local>>> {
+        let raw = self.state_get(key)?;
+
+        match raw {
+            Some(s) => {
+                let parsed = DateTime::parse_from_rfc3339(&s)?;
+                Ok(Some(parsed.with_timezone(&Local)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn state_set_timestamp(&self, key: &str, value: DateTime<Local>) -> anyhow::Result<()> {
+        self.state_set(key, &value.to_rfc3339())
     }
 }

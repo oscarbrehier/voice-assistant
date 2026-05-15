@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -21,12 +21,7 @@ use crate::{
         stt::stt_service::STTService,
         tts::TTSService,
         voice::SpeakerID,
-    },
-    commands::CommandConfig,
-    config::Config,
-    llm::LLMEngine,
-    memory::MemoryManager,
-    state::{GlobalContext, SharedContext, Vitals}, worker::{Packet, WorkerContext, spawn_transcription_worker},
+    }, commands::CommandConfig, config::Config, llm::LLMEngine, memory::MemoryManager, ritual::{RitualConfig, RitualContext}, state::{GlobalContext, SharedContext, Vitals}, worker::{Packet, WorkerContext, spawn_transcription_worker}
 };
 
 pub mod actions;
@@ -39,6 +34,7 @@ pub mod monitor;
 mod proactive;
 pub mod state;
 mod worker;
+pub mod ritual;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -218,7 +214,7 @@ pub async fn start_engine(
         command_config,
         llm_engine,
         sample_rate,
-        config,
+        config: config.clone(),
         memory: worker_memory,
         global_ctx: shared_context.clone(),
     };
@@ -261,6 +257,29 @@ pub async fn start_engine(
     {
         eprintln!("Startup verification error: {e}");
     }
+
+    let ritual_config = RitualConfig {
+        day_boundary_hour: 4,
+        theme_path: Path::new("config/theme.wav").to_owned(),
+        theme_volume: 1.0,
+        ducked_volume: 0.6,
+        fade_in_secs: 5.0,
+        fade_out_secs: 5.0
+    };
+    
+    let ritual_ctx = RitualContext {
+        global: shared_context.clone(),
+        memory: Arc::clone(&shared_memory),
+        tts: tts.clone(),
+        config: config.clone(),
+        tx: tx_internal.clone()
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = ritual::maybe_run_startup_ritual(ritual_ctx, ritual_config).await {
+            eprintln!("Startup ritual error: {e}");
+        }
+    });
 
     Ok((tx_external, stream))
 }

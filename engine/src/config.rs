@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub name: String,
+    pub locale: String,
 }
 
 impl Config {
