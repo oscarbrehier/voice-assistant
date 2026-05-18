@@ -1,9 +1,14 @@
+use std::time::Instant;
+
 use reqwest::Client;
 use serde_json::Value;
 
 use crate::llm::{Message, MistralRequest, MistralToolResponse, Tool};
 
-pub async fn call_mistral_stateless(system_prompt: String, message: String) -> anyhow::Result<String> {
+pub async fn call_mistral_stateless(
+    system_prompt: String,
+    message: String,
+) -> anyhow::Result<String> {
     let client = Client::new();
 
     let mistral_api_key: String =
@@ -55,6 +60,8 @@ pub async fn call_mistral_with_tools(
     let mistral_api_key: String =
         std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY key not found");
 
+    let network_start = Instant::now();
+
     let response = client
         .post("https://api.mistral.ai/v1/chat/completions")
         .header("Content-Type", "application/json")
@@ -63,12 +70,18 @@ pub async fn call_mistral_with_tools(
         .send()
         .await?;
 
+    let network_elapsed = network_start.elapsed();
+
     if !response.status().is_success() {
         let error_text = response.text().await?;
         anyhow::bail!("Mistral API error: {}", error_text);
     }
 
+    let parse_start = Instant::now();
     let result: MistralToolResponse = response.json().await?;
+    let parse_elapsed = parse_start.elapsed();
+
+    println!("mistral call complete, network_ms = {} parse_ms = {} prompt_msgs = {}", network_elapsed.as_millis(), parse_elapsed.as_millis(), request.messages.len());  
 
     Ok(result)
 }

@@ -152,7 +152,7 @@ pub async fn start_engine(
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
     // let stt = STT::new("engine/models/whisper")?;
-    let tts = TTSService::new(paths.script_dir);
+    let tts = TTSService::new(paths.script_dir).await?;
 
     let command_config = CommandConfig::from_file(commands_file)?;
 
@@ -262,7 +262,7 @@ pub async fn start_engine(
         day_boundary_hour: 4,
         theme_path: Path::new("config/theme.wav").to_owned(),
         theme_volume: 1.0,
-        ducked_volume: 0.6,
+        ducked_volume: 0.5,
         fade_in_secs: 5.0,
         fade_out_secs: 5.0
     };

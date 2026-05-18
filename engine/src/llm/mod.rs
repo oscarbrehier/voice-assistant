@@ -1,11 +1,28 @@
-use std::{fs, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex}, time::Instant,
+};
 
 use anyhow::{Context, Ok};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    Opt, config::Config, llm::{history::ConversationHistory, mistral::{call_mistral_stateless, call_mistral_with_tools}, tools::{ToolContext, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, time::GetTimeTool}}, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::Urgency
+    Opt,
+    config::Config,
+    llm::{
+        history::ConversationHistory,
+        mistral::{call_mistral_stateless, call_mistral_with_tools},
+        tools::{
+            ToolContext, ToolRegistry,
+            memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool},
+            time::GetTimeTool,
+        },
+    },
+    memory::{MemoryManager, MemoryType},
+    state::SharedContext,
+    worker::Urgency,
 };
 
 pub mod history;
@@ -19,7 +36,7 @@ pub struct LLMEngine {
     core_identity_cache: String,
     pub needs_identity_refresh: bool,
     memory: Arc<std::sync::Mutex<MemoryManager>>,
-    tools: ToolRegistry
+    tools: ToolRegistry,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -84,9 +101,7 @@ pub struct MistralRequest {
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct MistralResponse {
-    
-}
+pub struct MistralResponse {}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct MistralToolResponse {
@@ -118,19 +133,19 @@ impl LLMEngine {
     pub fn new<P: AsRef<Path>>(
         prompts_dir: P,
         memory: Arc<std::sync::Mutex<MemoryManager>>,
-        config: Config
+        config: Config,
     ) -> anyhow::Result<Self> {
-
         let prompts_dir = prompts_dir.as_ref().to_path_buf();
-        
+
         let system_prompt_template = load_prompt(&prompts_dir, "system_prompt.md", &config.name)?;
-        let proactive_prompt_template = load_prompt(&prompts_dir, "proactive_prompt.md", &config.name)?;
+        let proactive_prompt_template =
+            load_prompt(&prompts_dir, "proactive_prompt.md", &config.name)?;
 
         let core_identity_cache = Self::load_core_identity(&memory)?;
         let tools = Self::build_tool_registry();
-        
+
         Ok(Self {
-            history:  ConversationHistory::new(),
+            history: ConversationHistory::new(),
             system_prompt_template,
             proactive_prompt_template,
             core_identity_cache,
@@ -141,7 +156,8 @@ impl LLMEngine {
     }
 
     fn load_core_identity(memory: &Arc<Mutex<MemoryManager>>) -> anyhow::Result<String> {
-        let lock = memory.lock()
+        let lock = memory
+            .lock()
             .map_err(|_| anyhow::anyhow!("Memory mutex poisoned"))?;
         Ok(lock.get_core_identity()?.join("\n"))
     }
@@ -156,7 +172,7 @@ impl LLMEngine {
 
         tools
     }
-    
+
     #[instrument(skip(self, text, global_ctx, core_identity, relevant_memories), fields(input = %text))]
     pub async fn generate(
         &mut self,
@@ -165,6 +181,8 @@ impl LLMEngine {
         core_identity: Vec<String>,
         relevant_memories: Vec<String>,
     ) -> anyhow::Result<String> {
+        let overall_start = Instant::now();
+
         if !core_identity.is_empty() {
             self.core_identity_cache = core_identity.join("\n");
             self.needs_identity_refresh = false;
@@ -199,16 +217,21 @@ impl LLMEngine {
         self.history.add_user_input(text);
 
         let tool_defs = self.tools.definitions();
-        
+
         let max_iterations = 5;
 
         for _iteration in 0..max_iterations {
+             let iter_start = Instant::now();
+            
             let response = call_mistral_with_tools(
                 final_system_prompt.clone(),
                 &mut self.history.messages,
                 tool_defs.clone(),
             )
             .await?;
+
+            let llm_elapsed = iter_start.elapsed();
+            println!("LLM call complete: {}", llm_elapsed.as_millis());
 
             println!("response: {:?}", response);
 
@@ -224,6 +247,8 @@ impl LLMEngine {
 
                     self.history
                         .add_assistant_response(Some(content.clone()), None);
+
+                    println!("generate complete, total_ms = {}", overall_start.elapsed().as_millis());
                     return Ok(content);
                 }
                 "tool_calls" => {
@@ -239,8 +264,12 @@ impl LLMEngine {
                     );
 
                     for tool_call in tool_calls {
+                        let tool_start = Instant::now();
+                        
                         let result = self.execute_tool(tool_call, global_ctx).await?;
 
+                        println!("tool execution complete, elapsed_ms = {}", tool_start.elapsed().as_millis());
+                        
                         self.history.add_tool_result(
                             tool_call.id.clone(),
                             tool_call.function.name.clone(),
@@ -262,13 +291,15 @@ impl LLMEngine {
         tool_call: &ToolCall,
         global_ctx: &SharedContext,
     ) -> anyhow::Result<String> {
-        let tool = self.tools.get(&tool_call.function.name)
+        let tool = self
+            .tools
+            .get(&tool_call.function.name)
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", tool_call.function.name))?;
 
         let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
         let ctx = ToolContext {
             global_ctx,
-            memory: Arc::clone(&self.memory)
+            memory: Arc::clone(&self.memory),
         };
 
         let outcome = tool.execute(args, &ctx).await?;
@@ -276,23 +307,25 @@ impl LLMEngine {
         if outcome.needs_identity_refresh {
             self.needs_identity_refresh = true;
         }
-        
+
         Ok(outcome.result)
     }
-    
-    pub async fn generate_proactive(&self, context: &str, urgency: &Urgency) -> anyhow::Result<Option<String>> {
 
+    pub async fn generate_proactive(
+        &self,
+        context: &str,
+        urgency: &Urgency,
+    ) -> anyhow::Result<Option<String>> {
         let urgency_guidance = Self::urgency_guidance(urgency);
-        
-        let prompt = self.proactive_prompt_template
+
+        let prompt = self
+            .proactive_prompt_template
             .replace("{{context}}", context)
             .replace("{{urgency_guidance}}", urgency_guidance);
 
         let response = call_mistral_stateless(prompt, "proceed".into()).await?;
-        let trimmed = response
-            .trim()
-            .to_lowercase();
-        
+        let trimmed = response.trim().to_lowercase();
+
         if response.is_empty() || trimmed == "(silent)" || trimmed.starts_with("no response") {
             return Ok(None);
         }
@@ -304,10 +337,16 @@ impl LLMEngine {
 
     fn urgency_guidance(urgency: &Urgency) -> &'static str {
         match urgency {
-            Urgency::Low => "Low urgency — only speak if you have something genuinely interesting or useful to say. Silence is usually the better choice. Be casual.",
-            Urgency::Normal => "Normal urgency — speak if it's helpful, stay quiet if it's not actionable. Conversational tone.",
+            Urgency::Low => {
+                "Low urgency — only speak if you have something genuinely interesting or useful to say. Silence is usually the better choice. Be casual."
+            }
+            Urgency::Normal => {
+                "Normal urgency — speak if it's helpful, stay quiet if it's not actionable. Conversational tone."
+            }
             Urgency::High => "High urgency — likely worth mentioning. Be direct but calm.",
-            Urgency::Critical => "Critical — speak. The user needs to know now. Be clear and immediate, not casual.",
+            Urgency::Critical => {
+                "Critical — speak. The user needs to know now. Be clear and immediate, not casual."
+            }
         }
     }
 }
