@@ -186,11 +186,11 @@ pub fn run_vad_loop(
     assistant_active: Arc<AtomicBool>,
     ctx: SharedContext,
 ) {
-    let vad_chunk_duration_spec = 2;
+    let vad_chunk_duration_spec = 1;
     let pulse_chunk_duration_ms = 50;
-    let overlap_duration = 0.25;
+    let overlap_duration = 0.15;
 
-    let vad_chunk_size = sample_rate * channels * vad_chunk_duration_spec as usize;
+    let vad_chunk_size = (sample_rate as f32 * channels as f32 * 0.6) as usize;
     let pulse_chunk_size = (sample_rate * channels * pulse_chunk_duration_ms) / 1000;
     let overlap_size = sample_rate * channels * overlap_duration as usize;
 
@@ -202,7 +202,7 @@ pub fn run_vad_loop(
     let mut circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
 
     let mut last_speech_instant = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(20);
+    let timeout = std::time::Duration::from_secs(40);
 
     let max_speech_duration_secs = 30;
     let max_speech_samples = channels * sample_rate * max_speech_duration_secs;
@@ -346,12 +346,12 @@ pub fn run_vad_loop(
 
                 let updated_state = ctx.engine_state.load(Ordering::SeqCst);
 
-                if updated_state == State::Recording as u8 && circular_buffer.full {
-                    let wake_word_audio = circular_buffer.get_all();
-                    let _ = tx.send(Packet::WakeWordCheck(wake_word_audio.clone()));
+                // if updated_state == State::Recording as u8 && circular_buffer.full {
+                //     let wake_word_audio = circular_buffer.get_all();
+                //     let _ = tx.send(Packet::WakeWordCheck(wake_word_audio.clone()));
                     
-                    circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
-                }
+                //     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
+                // }
 
                 let is_collecting_speech = updated_state == State::Active as u8
                     || updated_state == State::Recording as u8

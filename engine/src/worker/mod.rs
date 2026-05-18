@@ -37,7 +37,7 @@ pub enum Urgency {
 pub enum Packet {
     Pulse(Vec<f32>),
     Speech(Vec<f32>),
-    WakeWordCheck(Vec<f32>),
+    // WakeWordCheck(Vec<f32>),
     Volume(f32),
     Transcription(String),
     State(State),
@@ -220,17 +220,17 @@ pub fn spawn_transcription_worker(
 
                     process_proactive_trigger(kind, context, urgency, &mut ctx, &tx).await;
                 }
-                Packet::WakeWordCheck(data) => {
-                    if let Some(transcription) = get_transcription(&mut ctx, &data).await {
-                        println!("WAKE WORD CHECK: {transcription}");
-                        let wake_word = ctx.config.name.to_lowercase();
+                // Packet::WakeWordCheck(data) => {
+                //     if let Some(transcription) = get_transcription(&mut ctx, &data).await {
+                //         println!("WAKE WORD CHECK: {transcription}");
+                //         let wake_word = ctx.config.name.to_lowercase();
 
-                        if transcription.contains(&wake_word) {
-                            println!("wake word detected");
-                            State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
-                        }
-                    }
-                }
+                //         if transcription.contains(&wake_word) {
+                //             println!("wake word detected");
+                //             State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
+                //         }
+                //     }
+                // }
                 _ => continue,
             };
         }
