@@ -1,10 +1,12 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex}, time::Instant,
+    sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use anyhow::{Context, Ok};
+use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -33,6 +35,7 @@ pub struct LLMEngine {
     history: ConversationHistory,
     system_prompt_template: String,
     proactive_prompt_template: String,
+    greeting_prompt_template: String,
     core_identity_cache: String,
     pub needs_identity_refresh: bool,
     memory: Arc<std::sync::Mutex<MemoryManager>>,
@@ -122,11 +125,11 @@ pub struct ResponseMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
-pub fn load_prompt(dir: &Path, filename: &str, name: &str) -> anyhow::Result<String> {
+pub fn load_prompt(dir: &Path, filename: &str, config: &Config) -> anyhow::Result<String> {
     let path = dir.join(filename);
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read prompt file: {}", path.display()))?;
-    Ok(content.replace("{{name}}", name))
+    Ok(content.replace("{{name}}", &config.name))
 }
 
 impl LLMEngine {
@@ -137,9 +140,9 @@ impl LLMEngine {
     ) -> anyhow::Result<Self> {
         let prompts_dir = prompts_dir.as_ref().to_path_buf();
 
-        let system_prompt_template = load_prompt(&prompts_dir, "system_prompt.md", &config.name)?;
-        let proactive_prompt_template =
-            load_prompt(&prompts_dir, "proactive_prompt.md", &config.name)?;
+        let system_prompt_template = load_prompt(&prompts_dir, "system_prompt.md", &config)?;
+        let proactive_prompt_template = load_prompt(&prompts_dir, "proactive_prompt.md", &config)?;
+        let greeting_prompt_template = load_prompt(&prompts_dir, "greeting_prompt.md", &config)?;
 
         let core_identity_cache = Self::load_core_identity(&memory)?;
         let tools = Self::build_tool_registry();
@@ -148,11 +151,16 @@ impl LLMEngine {
             history: ConversationHistory::new(),
             system_prompt_template,
             proactive_prompt_template,
+            greeting_prompt_template,
             core_identity_cache,
             needs_identity_refresh: false,
             memory,
             tools,
         })
+    }
+
+    pub fn history_mut(&mut self) -> &mut ConversationHistory {
+        &mut self.history
     }
 
     fn load_core_identity(memory: &Arc<Mutex<MemoryManager>>) -> anyhow::Result<String> {
@@ -221,8 +229,8 @@ impl LLMEngine {
         let max_iterations = 5;
 
         for _iteration in 0..max_iterations {
-             let iter_start = Instant::now();
-            
+            let iter_start = Instant::now();
+
             let response = call_mistral_with_tools(
                 final_system_prompt.clone(),
                 &mut self.history.messages,
@@ -248,7 +256,10 @@ impl LLMEngine {
                     self.history
                         .add_assistant_response(Some(content.clone()), None);
 
-                    println!("generate complete, total_ms = {}", overall_start.elapsed().as_millis());
+                    println!(
+                        "generate complete, total_ms = {}",
+                        overall_start.elapsed().as_millis()
+                    );
                     return Ok(content);
                 }
                 "tool_calls" => {
@@ -265,11 +276,14 @@ impl LLMEngine {
 
                     for tool_call in tool_calls {
                         let tool_start = Instant::now();
-                        
+
                         let result = self.execute_tool(tool_call, global_ctx).await?;
 
-                        println!("tool execution complete, elapsed_ms = {}", tool_start.elapsed().as_millis());
-                        
+                        println!(
+                            "tool execution complete, elapsed_ms = {}",
+                            tool_start.elapsed().as_millis()
+                        );
+
                         self.history.add_tool_result(
                             tool_call.id.clone(),
                             tool_call.function.name.clone(),
@@ -311,8 +325,22 @@ impl LLMEngine {
         Ok(outcome.result)
     }
 
+    fn record_unsolicited_speech(&mut self, spoken: &str, trigger_description: &str) {
+        self.history
+            .add_assistant_response(Some(spoken.to_string()), None);
+
+        if let Result::Ok(lock) = self.memory.lock() {
+            let key = format!("unsolicited_speech_{}", chrono::Utc::now().timestamp());
+            let entry = format!(
+                "Spoke unsolicited ({}): \"{}\"",
+                trigger_description, spoken
+            );
+            let _ = lock.save(&key, &entry, MemoryType::Situational);
+        }
+    }
+
     pub async fn generate_proactive(
-        &self,
+        &mut self,
         context: &str,
         urgency: &Urgency,
     ) -> anyhow::Result<Option<String>> {
@@ -330,7 +358,7 @@ impl LLMEngine {
             return Ok(None);
         }
 
-        // TODO: implement interaction record (history + message)
+        self.record_unsolicited_speech(&response, &format!("proactive trigger: {}", context));
 
         Ok(Some(response))
     }
@@ -348,5 +376,29 @@ impl LLMEngine {
                 "Critical — speak. The user needs to know now. Be clear and immediate, not casual."
             }
         }
+    }
+
+    pub async fn generate_greeting(&mut self, config: &Config) -> anyhow::Result<Option<String>> {
+        let current_time = Local::now();
+        let weekday = current_time.date_naive().weekday();
+
+        let prompt = self
+            .greeting_prompt_template
+            .replace("{{time}}", &current_time.format("%R").to_string())
+            .replace("{{day_of_week}}", &weekday.to_string())
+            .replace("{{date}}", &current_time.format("%-d %B").to_string())
+            .replace("{{locale}}", &config.locale);
+
+        let result = call_mistral_stateless(prompt, "proceed".into()).await?;
+
+        if result.is_empty() {
+            return Ok(None);
+        }
+
+        self.record_unsolicited_speech(&result, "startup greeting");
+
+        println!("result: {}", result);
+
+        Ok(Some(result))
     }
 }

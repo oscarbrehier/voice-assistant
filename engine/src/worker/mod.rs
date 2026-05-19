@@ -1,24 +1,16 @@
-use std::sync::{
+use std::{path::Path, sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-};
+}};
 
 use serde::Serialize;
 use tokio::{sync::broadcast, task::JoinHandle};
 
 use crate::{
-    State,
-    audio::{
+    State, audio::{
         enrollment::handle_enrollment, stt::stt_service::STTService, tts::TTSService,
         utils::resample_to_16khz,
-    },
-    commands::CommandConfig,
-    config::Config,
-    llm::LLMEngine,
-    memory::MemoryManager,
-    proactive::TriggerKind,
-    state::SharedContext,
-    worker::{proactive::process_proactive_trigger, speech::process_speech_logic},
+    }, commands::CommandConfig, config::Config, llm::LLMEngine, memory::MemoryManager, proactive::TriggerKind, ritual::{self, RitualConfig}, state::SharedContext, worker::{proactive::process_proactive_trigger, speech::process_speech_logic}
 };
 
 pub mod proactive;
@@ -46,6 +38,7 @@ pub enum Packet {
         context: String,
         urgency: Urgency,
     },
+    StartupRitual,
 }
 
 impl Packet {
@@ -220,17 +213,22 @@ pub fn spawn_transcription_worker(
 
                     process_proactive_trigger(kind, context, urgency, &mut ctx, &tx).await;
                 }
-                // Packet::WakeWordCheck(data) => {
-                //     if let Some(transcription) = get_transcription(&mut ctx, &data).await {
-                //         println!("WAKE WORD CHECK: {transcription}");
-                //         let wake_word = ctx.config.name.to_lowercase();
+                Packet::StartupRitual => {
+                    let config = RitualConfig {
+                        day_boundary_hour: 4,
+                        theme_path: Path::new("config/theme.wav").to_owned(),
+                        theme_volume: 1.0,
+                        ducked_volume: 0.5,
+                        fade_in_secs: 5.0,
+                        fade_out_secs: 5.0,
+                    };
 
-                //         if transcription.contains(&wake_word) {
-                //             println!("wake word detected");
-                //             State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
-                //         }
-                //     }
-                // }
+                    if let Err(e) =
+                        ritual::maybe_run_startup_ritual(config, &mut ctx, &tx).await
+                    {
+                        eprintln!("Startup ritual error: {e}");
+                    }
+                }
                 _ => continue,
             };
         }
