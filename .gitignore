@@ -5,6 +5,7 @@
 **/voices/
 
 profiles/*
+test/*
 
 **/*.wav
 **/*.mp3

@@ -257,6 +257,17 @@ impl SpeakerID {
             }
         }
 
+        println!(
+            "[speaker] pos={:.3} max_neg={:.3} thresh={:.3} pos_ok={} distinct={} -> decision={} (recent_scores={})",
+            positive_sim,
+            max_negative_sim,
+            threshold,
+            is_positive_enough,
+            is_distinctive,
+            decision,
+            self.recent_scores.len(),
+        );
+
         Ok(decision)
     }
 
@@ -275,7 +286,7 @@ impl SpeakerID {
         let features = fbank.compute(samples);
 
         let (t_dim, mel_dim) = (features.nrows(), features.ncols());
-        
+
         let mut bin_means = vec![0.0f32; mel_dim];
         for t in 0..t_dim {
             for m in 0..mel_dim {
@@ -297,7 +308,7 @@ impl SpeakerID {
         let input_tensor = ort::value::Value::from_array(array_3d)?;
 
         let outputs = self.session.run(ort::inputs!["feats" => input_tensor])?;
-        
+
         let output_value = outputs
             .get("embs")
             .ok_or_else(|| anyhow::anyhow!("No embs"))?;
@@ -306,7 +317,7 @@ impl SpeakerID {
         let mut emb = extracted_slice.to_vec();
         let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
         emb.iter_mut().for_each(|x| *x /= norm);
-        
+
         Ok(emb)
     }
 

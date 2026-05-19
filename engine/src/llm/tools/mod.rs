@@ -6,6 +6,7 @@ use crate::{llm::FunctionDefinition, memory::MemoryManager, state::SharedContext
 
 pub mod time;
 pub mod memory;
+pub mod screen;
 
 pub struct ToolContext<'a> {
     pub global_ctx: &'a SharedContext,

@@ -28,7 +28,7 @@ pub mod actions;
 mod audio;
 mod commands;
 mod config;
-mod llm;
+pub mod llm;
 mod memory;
 pub mod monitor;
 mod proactive;

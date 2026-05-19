@@ -17,9 +17,7 @@ use crate::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
-            ToolContext, ToolRegistry,
-            memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool},
-            time::GetTimeTool,
+            ToolContext, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, screen::LookAtScreen, time::GetTimeTool
         },
     },
     memory::{MemoryManager, MemoryType},
@@ -177,7 +175,8 @@ impl LLMEngine {
         tools.register(SearchMemoryTool);
         tools.register(QueryMemoryTool);
         tools.register(SaveMemoryTool);
-
+        tools.register(LookAtScreen);
+        
         tools
     }
 

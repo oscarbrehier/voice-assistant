@@ -1,7 +1,10 @@
-use std::{path::{Path, PathBuf}, time::Duration};
-use engine::{EnginePaths, start_engine};
+use engine::{EnginePaths, llm::mistral::call_mistral_with_vision, start_engine};
 use mel_spec::fbank::FbankConfig;
-use tokio::signal;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use tokio::{fs, signal};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -9,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
         config_dir: PathBuf::from("config"),
         script_dir: PathBuf::from("engine/python"),
     };
-     
+
     match start_engine(paths, Some(19)).await {
         Ok((tx, _stream)) => {
             println!("engile started");
