@@ -2,15 +2,17 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::{llm::FunctionDefinition, memory::MemoryManager, state::SharedContext};
+use crate::{actions::obsidian::VaultConfig, llm::FunctionDefinition, memory::MemoryManager, state::SharedContext};
 
 pub mod time;
 pub mod memory;
 pub mod screen;
+pub mod obsidian;
 
 pub struct ToolContext<'a> {
     pub global_ctx: &'a SharedContext,
     pub memory: Arc<std::sync::Mutex<MemoryManager>>,
+    pub vault_config: Arc<VaultConfig>
 }
 
 #[derive(Default)]

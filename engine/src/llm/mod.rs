@@ -5,19 +5,26 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Context, Ok};
+use anyhow::{Context};
 use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
     Opt,
+    actions::obsidian::VaultConfig,
     config::Config,
     llm::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
-            ToolContext, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, screen::LookAtScreen, time::GetTimeTool
+            ToolContext, ToolOutcome, ToolRegistry,
+            memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool},
+            obsidian::{
+                AppendToNoteTool, CreateNoteTool, GetRecentNotesTool, ReadNoteTool, SearchNotesTool,
+            },
+            screen::LookAtScreen,
+            time::GetTimeTool,
         },
     },
     memory::{MemoryManager, MemoryType},
@@ -36,8 +43,9 @@ pub struct LLMEngine {
     greeting_prompt_template: String,
     core_identity_cache: String,
     pub needs_identity_refresh: bool,
-    memory: Arc<std::sync::Mutex<MemoryManager>>,
     tools: ToolRegistry,
+    memory: Arc<std::sync::Mutex<MemoryManager>>,
+    vault_config: Arc<VaultConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -135,6 +143,7 @@ impl LLMEngine {
         prompts_dir: P,
         memory: Arc<std::sync::Mutex<MemoryManager>>,
         config: Config,
+        vault_config: Arc<VaultConfig>,
     ) -> anyhow::Result<Self> {
         let prompts_dir = prompts_dir.as_ref().to_path_buf();
 
@@ -154,6 +163,7 @@ impl LLMEngine {
             needs_identity_refresh: false,
             memory,
             tools,
+            vault_config,
         })
     }
 
@@ -176,7 +186,12 @@ impl LLMEngine {
         tools.register(QueryMemoryTool);
         tools.register(SaveMemoryTool);
         tools.register(LookAtScreen);
-        
+        tools.register(SearchNotesTool);
+        tools.register(GetRecentNotesTool);
+        tools.register(ReadNoteTool);
+        tools.register(CreateNoteTool);
+        tools.register(AppendToNoteTool);
+
         tools
     }
 
@@ -222,6 +237,7 @@ impl LLMEngine {
             .replace("{{retrieved_memories}}", &situational_str);
 
         self.history.add_user_input(text);
+        self.history.ensure_valid_start();
 
         let tool_defs = self.tools.definitions();
 
@@ -229,7 +245,7 @@ impl LLMEngine {
 
         for _iteration in 0..max_iterations {
             let iter_start = Instant::now();
-
+            
             let response = call_mistral_with_tools(
                 final_system_prompt.clone(),
                 &mut self.history.messages,
@@ -310,12 +326,17 @@ impl LLMEngine {
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", tool_call.function.name))?;
 
         let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
+
         let ctx = ToolContext {
             global_ctx,
             memory: Arc::clone(&self.memory),
+            vault_config: self.vault_config.clone(),
         };
 
-        let outcome = tool.execute(args, &ctx).await?;
+        let outcome = match tool.execute(args, &ctx).await {
+            Ok(r) => r,
+            Err(e) => ToolOutcome::ok(format!("Tool error: {}", e)),
+        };
 
         if outcome.needs_identity_refresh {
             self.needs_identity_refresh = true;

@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub struct Config {
     pub name: String,
     pub locale: String,
+    pub vault_path: String
 }
 
 impl Config {

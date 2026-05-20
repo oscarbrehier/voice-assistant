@@ -132,9 +132,16 @@ impl TTSService {
                 Err(e) => anyhow::bail!("Failed to check TTS process status: {}", e),
             }
 
+            let single_line = text
+                .replace('\n', " ")
+                .replace('\r', " ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            
             wrapper
                 .stdin
-                .write_all(format!("TEXT: {}\n", text).as_bytes())
+                .write_all(format!("TEXT: {}\n", single_line).as_bytes())
                 .await
                 .context("Failed to send speech text bytes")?;
             wrapper.stdin.flush().await?;

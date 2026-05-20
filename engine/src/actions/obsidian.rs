@@ -65,6 +65,11 @@ pub fn list_vault_index(config: &VaultConfig) -> anyhow::Result<Vec<NoteEntry>> 
     Ok(note_entries)
 }
 
+pub fn clean_path_display(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
 pub fn search_notes(query: &str, index: &[NoteEntry]) -> anyhow::Result<Vec<NoteEntry>> {
     let query_lower = query.to_lowercase();
 

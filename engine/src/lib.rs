@@ -15,7 +15,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::{
-    audio::{
+    actions::obsidian::VaultConfig, audio::{
         capture::{init_audio_capture, run_vad_loop},
         onboarding, setup_audio_device,
         stt::stt_service::STTService,
@@ -151,7 +151,6 @@ pub async fn start_engine(
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
-    // let stt = STT::new("engine/models/whisper")?;
     let tts = TTSService::new(paths.script_dir).await?;
 
     let command_config = CommandConfig::from_file(commands_file)?;
@@ -161,7 +160,9 @@ pub async fn start_engine(
         monitor::run_monitoring_loop(monitor_state).await;
     });
 
-    let llm_engine = LLMEngine::new(paths.config_dir, Arc::clone(&shared_memory), config.clone())?;
+    
+    let vault_config = Arc::new(VaultConfig::new(PathBuf::from(&config.vault_path)));
+    let llm_engine = LLMEngine::new(paths.config_dir, Arc::clone(&shared_memory), config.clone(), vault_config.clone())?;
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");
