@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::time::sleep;
 
-use crate::{actions::system::fetch_system_snapshot, state::SharedContext};
+use crate::{integrations::system::fetch_system_snapshot, state::SharedContext};
 
 pub async fn run_monitoring_loop(state: SharedContext) {
     let mut sys = sysinfo::System::new_all();

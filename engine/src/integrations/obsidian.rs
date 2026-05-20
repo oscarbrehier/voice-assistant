@@ -1,10 +1,16 @@
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::SystemTime};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, Ok, anyhow};
 use strsim::jaro_winkler;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
+
+use crate::llm::tools::ToolContext;
+use crate::memory::MemoryManager;
+use crate::utils::search::fuzzy_search;
 
 pub struct VaultConfig {
     pub root_path: PathBuf,
@@ -35,16 +41,68 @@ impl VaultConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct Project {
+    pub display_name: String,
+    pub path: PathBuf,
+}
+
+pub fn list_projects(config: &VaultConfig) -> anyhow::Result<Vec<Project>> {
+    let mut projects: Vec<Project> = Vec::new();
+
+    for entry in std::fs::read_dir(&config.root_path)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(name) = path.file_name() {
+                projects.push(Project {
+                    display_name: name.to_string_lossy().to_owned().to_string(),
+                    path,
+                });
+            }
+        }
+    }
+
+    Ok(projects)
+}
+
+pub fn search_projects(query: &str, projects: &[Project]) -> Vec<Project> {
+    fuzzy_search(query, projects)
+}
+
+pub fn get_current_project(memory: &Arc<Mutex<MemoryManager>>) -> anyhow::Result<Option<Project>> {
+    let path_str = {
+        let lock = memory
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Memory lock poisoned"))?;
+        lock.state_get("current_project")?
+    };
+
+    match path_str {
+        Some(s) => {
+            let path = PathBuf::from(&s);
+            let display_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| s.clone());
+            
+            Ok(Some(Project { display_name, path }))
+        }
+        None => Ok(None),
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct NoteEntry {
     pub display_name: String,
     pub path: PathBuf,
     pub modified_time: SystemTime,
 }
 
-pub fn list_vault_index(config: &VaultConfig) -> anyhow::Result<Vec<NoteEntry>> {
+fn list_index_at(root: &Path) -> anyhow::Result<Vec<NoteEntry>> {
     let mut note_entries = Vec::new();
 
-    for entry in WalkDir::new(&config.root_path)
+    for entry in WalkDir::new(root)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -65,66 +123,24 @@ pub fn list_vault_index(config: &VaultConfig) -> anyhow::Result<Vec<NoteEntry>> 
     Ok(note_entries)
 }
 
+pub fn list_vault_index(config: &VaultConfig) -> anyhow::Result<Vec<NoteEntry>> {
+	list_index_at(&config.root_path)
+}
+
+pub fn scoped_index(ctx: &ToolContext) -> anyhow::Result<Vec<NoteEntry>> {
+	match get_current_project(&ctx.memory)? {
+		Some(project) => list_index_at(&project.path),
+		None => list_vault_index(&ctx.vault_config)
+	}
+}
+
+pub fn search_notes(query: &str, index: &[NoteEntry]) -> Vec<NoteEntry> {
+    fuzzy_search(query, index)
+}
+
 pub fn clean_path_display(path: &std::path::Path) -> String {
     let s = path.to_string_lossy();
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
-}
-
-pub fn search_notes(query: &str, index: &[NoteEntry]) -> anyhow::Result<Vec<NoteEntry>> {
-    let query_lower = query.to_lowercase();
-
-    let mut matches: Vec<(f64, NoteEntry)> = Vec::new();
-
-    for entry in index {
-        let display_name_lower = entry.display_name.to_lowercase();
-
-        let score = if display_name_lower.contains(&query_lower) {
-            let position = display_name_lower.find(&query_lower).unwrap() as f64;
-            let len = display_name_lower.len() as f64;
-
-            0.95_f64 + (0.05_f64 * (1.0_f64 - (position / len)))
-        } else {
-            let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-            let name_words: Vec<&str> = display_name_lower.split_whitespace().collect();
-
-            let mut total_score = 0.0;
-            let mut matched_words = 0;
-
-            for q_word in &query_words {
-                let mut best_word_score = 0.0_f64;
-
-                for n_word in &name_words {
-                    let word_score = jaro_winkler(q_word, n_word);
-                    best_word_score = best_word_score.max(word_score);
-                }
-
-                if best_word_score > 0.7 {
-                    total_score += best_word_score;
-                    matched_words += 1;
-                }
-            }
-
-            if matched_words > 0 {
-                total_score / query_words.len() as f64
-            } else {
-                jaro_winkler(&query_lower, &display_name_lower)
-            }
-        };
-
-        if score > 0.7 {
-            matches.push((score, entry.clone()));
-        }
-    }
-
-    matches.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-
-    let best_matches = matches
-        .into_iter()
-        .take(5)
-        .map(|(_, entry)| entry)
-        .collect();
-
-    Ok(best_matches)
 }
 
 pub fn get_recent_notes(index: &[NoteEntry], limit: usize) -> anyhow::Result<Vec<NoteEntry>> {

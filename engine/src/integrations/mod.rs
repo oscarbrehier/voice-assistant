@@ -4,7 +4,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     Packet,
-    actions::{datetime::get_time, media::{next_track, play_pause, previous_track}, system::spawn_app},
+    integrations::{datetime::get_time, media::{next_track, play_pause, previous_track}, system::spawn_app},
     audio::tts::TTSService, state::SharedContext,
 };
 

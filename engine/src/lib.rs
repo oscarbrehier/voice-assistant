@@ -15,7 +15,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::{
-    actions::obsidian::VaultConfig, audio::{
+    integrations::obsidian::VaultConfig, audio::{
         capture::{init_audio_capture, run_vad_loop},
         onboarding, setup_audio_device,
         stt::stt_service::STTService,
@@ -24,7 +24,8 @@ use crate::{
     }, commands::CommandConfig, config::Config, llm::LLMEngine, memory::MemoryManager, ritual::{RitualConfig, RitualContext}, state::{GlobalContext, SharedContext, Vitals}, worker::{Packet, WorkerContext, spawn_transcription_worker}
 };
 
-pub mod actions;
+mod utils;
+pub mod integrations;
 mod audio;
 mod commands;
 mod config;

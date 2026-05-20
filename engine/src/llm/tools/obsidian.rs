@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use tracing_subscriber::fmt::format;
 
 use crate::{
-    actions::obsidian::{
-        NoteEntry, VaultConfig, append_to_note, clean_path_display, create_note, get_recent_notes, list_vault_index, read_note_content, search_notes
+    integrations::obsidian::{
+        NoteEntry, VaultConfig, append_to_note, clean_path_display, create_note, get_recent_notes, list_vault_index, read_note_content, scoped_index, search_notes
     },
     llm::{
         FunctionDefinition,
@@ -20,19 +20,19 @@ pub struct ReadNoteTool;
 pub struct CreateNoteTool;
 pub struct AppendToNoteTool;
 
-fn resolve_note_path(path_str: &str, config: &VaultConfig) -> anyhow::Result<PathBuf> {
+fn resolve_note_path(path_str: &str, ctx: &ToolContext<'_>) -> anyhow::Result<PathBuf> {
     if path_str.contains('/') || path_str.contains('\\') {
         let p = PathBuf::from(path_str);
         let canonical = p
             .canonicalize()
             .map_err(|_| anyhow::anyhow!("Note not found: {}", path_str))?;
-        if !canonical.starts_with(&config.root_path) {
+        if !canonical.starts_with(&ctx.vault_config.root_path) {
             anyhow::bail!("Path is outside the vault");
         }
         return Ok(canonical);
     }
 
-    let index = list_vault_index(config)?;
+    let index = scoped_index(&ctx)?;
     let name_stem = path_str.trim_end_matches(".md");
 
     let exact: Vec<&NoteEntry> = index
@@ -98,17 +98,8 @@ impl Tool for SearchNotesTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
 
-        let index = list_vault_index(&ctx.vault_config)?;
-
-        for i in index.iter() {
-            println!("{}: {}", i.display_name, i.path.display());
-        }
-
-        let matches = search_notes(query, &index)?;
-
-        for i in matches.iter() {
-            println!("{}: {}", i.display_name, i.path.display());
-        }
+        let index = scoped_index(&ctx)?;
+        let matches = search_notes(query, &index);
 
         if matches.is_empty() {
             return Ok(ToolOutcome::ok(format!(
@@ -163,7 +154,7 @@ impl Tool for ReadNoteTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
 
-        let path = resolve_note_path(path_str, &ctx.vault_config)?;
+        let path = resolve_note_path(path_str, &ctx)?;
         let content = read_note_content(&path).await?;
 
         Ok(ToolOutcome::ok(content))
@@ -266,7 +257,7 @@ impl Tool for AppendToNoteTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing content"))?;
 
-        let path = resolve_note_path(path_str, &ctx.vault_config)?;
+        let path = resolve_note_path(path_str, &ctx)?;
         append_to_note(&path, content).await?;
 
         Ok(ToolOutcome::ok(format!(
@@ -314,7 +305,7 @@ impl Tool for GetRecentNotesTool {
             .unwrap_or(5)
             .min(20) as usize;
 
-        let index = list_vault_index(&ctx.vault_config)?;
+        let index = scoped_index(&ctx)?;
         let result = get_recent_notes(&index, limit)?;
 
         if result.is_empty() {

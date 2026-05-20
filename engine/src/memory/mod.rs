@@ -13,6 +13,7 @@ pub struct MemoryManager {
 pub enum MemoryType {
     Identity,
     Situational,
+    EngineState
 }
 
 impl MemoryManager {
@@ -67,6 +68,7 @@ impl MemoryManager {
         match memory_type {
             MemoryType::Identity => self.save_identity(key, value)?,
             MemoryType::Situational => self.save_situational(key, value)?,
+            MemoryType::EngineState => self.save_state(key, value)?,
         };
         Ok(())
     }
@@ -83,6 +85,15 @@ impl MemoryManager {
     pub fn save_situational(&self, key: &str, value: &str) -> anyhow::Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO memories (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn save_state(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO engine_state (key, value) VALUES (?1, ?2)",
             params![key, value],
         )?;
 
@@ -211,11 +222,11 @@ impl MemoryManager {
 
     pub fn state_set(&self, key: &str, value: &str) -> anyhow::Result<()> {
         let now = Local::now().to_rfc3339();
-        
+
         self.conn.execute(
-            "INSERT INTO engine_state (key, value, updated_at) 
+            "INSERT INTO engine_state (key, value, updated_at)
             VALUES (?1, ?2, ?3)
-            ON CONFLICT(key) DO UPDATE SET 
+            ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
                 updated_at = excluded.updated_at",
             params![key, value, now],

@@ -11,25 +11,15 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    Opt,
-    actions::obsidian::VaultConfig,
-    config::Config,
-    llm::{
+    Opt, config::Config, integrations::obsidian::VaultConfig, llm::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
-            ToolContext, ToolOutcome, ToolRegistry,
-            memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool},
-            obsidian::{
+            ToolContext, ToolOutcome, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, obsidian::{
                 AppendToNoteTool, CreateNoteTool, GetRecentNotesTool, ReadNoteTool, SearchNotesTool,
-            },
-            screen::LookAtScreen,
-            time::GetTimeTool,
+            }, project::{GetCurrentProjectTool, GetProjectsTool, SetProjectTool}, screen::LookAtScreen, time::GetTimeTool
         },
-    },
-    memory::{MemoryManager, MemoryType},
-    state::SharedContext,
-    worker::Urgency,
+    }, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::Urgency
 };
 
 pub mod history;
@@ -191,6 +181,9 @@ impl LLMEngine {
         tools.register(ReadNoteTool);
         tools.register(CreateNoteTool);
         tools.register(AppendToNoteTool);
+        tools.register(GetProjectsTool);
+        tools.register(GetCurrentProjectTool);
+        tools.register(SetProjectTool);
 
         tools
     }
