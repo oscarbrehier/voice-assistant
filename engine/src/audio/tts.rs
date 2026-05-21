@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context};
+use anyhow::Context;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
@@ -23,6 +23,37 @@ struct TTSInner {
     process: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+}
+
+fn split_into_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        current.push(c);
+
+        if matches!(c, '.' | '!' | '?') {
+            match chars.peek() {
+                Some(next) if next.is_whitespace() => {
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        sentences.push(trimmed);
+                    }
+                    current.clear();
+                }
+                None => {}
+                _ => {}
+            }
+        }
+    }
+
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        sentences.push(trimmed);
+    }
+
+    sentences
 }
 
 impl TTSService {
@@ -107,6 +138,53 @@ impl TTSService {
         Ok(())
     }
 
+    async fn synthesize_one(&self, text: &str) -> anyhow::Result<String> {
+        let mut wrapper = self.inner.lock().await;
+
+        match wrapper.process.try_wait() {
+            Ok(Some(status)) => anyhow::bail!("TTS process exited with status: {}", status),
+            Ok(None) => {}
+            Err(e) => anyhow::bail!("Failed to check TTS process status: {}", e),
+        }
+
+        let bytes = text.as_bytes();
+        wrapper
+            .stdin
+            .write_all(format!("TEXT {}\n", bytes.len()).as_bytes())
+            .await?;
+        wrapper.stdin.write_all(bytes).await?;
+        wrapper.stdin.flush().await?;
+
+        let mut response = String::new();
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            wrapper.stdout.read_line(&mut response),
+        )
+        .await
+        .context("TTS service timeout")?
+        .context("Failed to read TTS response")?;
+
+        let response = response.trim();
+        if let Some(path) = response.strip_prefix("DONE ") {
+            Ok(path.to_string())
+        } else if let Some(err) = response.strip_prefix("ERROR ") {
+            anyhow::bail!("TTS error: {}", err)
+        } else {
+            anyhow::bail!("Unexpected TTS response: {}", response)
+        }
+    }
+
+    fn play_queue(
+        mut rx: tokio::sync::mpsc::Receiver<String>,
+        context: SharedContext,
+    ) -> anyhow::Result<()> {
+        while let Some(path) = rx.blocking_recv() {
+            play_mp3_audio(&path, context.clone())?;
+        }
+
+        Ok(())
+    }
+
     async fn perform_speech(
         &self,
         text: String,
@@ -123,51 +201,36 @@ impl TTSService {
             State::broadcast(State::Speaking, &shared_context.engine_state, &sender);
         }
 
-        let output_path = {
-            let mut wrapper = self.inner.lock().await;
-
-            match wrapper.process.try_wait() {
-                Ok(Some(status)) => anyhow::bail!("TTS process exited with status: {}", status),
-                Ok(None) => {}
-                Err(e) => anyhow::bail!("Failed to check TTS process status: {}", e),
+        let sentences = split_into_sentences(&text);
+        if sentences.is_empty() {
+            if !bypass_state_change {
+                let target_state = next_state.unwrap_or(State::Active);
+                State::broadcast(target_state, &shared_context.engine_state, &sender);
             }
+            return Ok(());
+        }
 
-            let single_line = text
-                .replace('\n', " ")
-                .replace('\r', " ")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            
-            wrapper
-                .stdin
-                .write_all(format!("TEXT: {}\n", single_line).as_bytes())
-                .await
-                .context("Failed to send speech text bytes")?;
-            wrapper.stdin.flush().await?;
+        let (tx, rx) = tokio::sync::mpsc::channel::<String>(8);
 
-            let mut response = String::new();
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                wrapper.stdout.read_line(&mut response),
-            )
-            .await
-            .context("TTS service timeout")?
-            .context("Failed to read TTS response")?;
+        let ctx_for_consumer = shared_context.clone();
+        let consumer = tokio::task::spawn_blocking(move || Self::play_queue(rx, ctx_for_consumer));
 
-            let response = response.trim();
-
-            if let Some(path) = response.strip_prefix("DONE ") {
-                path.to_string()
-            } else if let Some(err) = response.strip_prefix("ERROR ") {
-                anyhow::bail!("TTS error: {}", err)
-            } else {
-                anyhow::bail!("Unexpected TTS response: {}", response)
+        for sentence in sentences {
+            match self.synthesize_one(&sentence).await {
+                Ok(path) => {
+                    if tx.send(path).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("TTS synthesis error for sentence: {}", e);
+                }
             }
-        };
+        }
 
-        let ctx_clone = shared_context.clone();
-        tokio::task::spawn_blocking(move || play_mp3_audio(&output_path, ctx_clone)).await??;
+        drop(tx);
+
+        consumer.await??;
 
         if !bypass_state_change {
             let target_state = next_state.unwrap_or(State::Active);

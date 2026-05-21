@@ -33,7 +33,7 @@ impl CpuSustainedTrigger {
         Self {
             window: VecDeque::with_capacity(30),
             active: false,
-            threshold: 40.0,
+            threshold: 85.0,
             window_size: 30
         }
     }

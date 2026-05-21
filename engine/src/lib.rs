@@ -12,30 +12,38 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use parking_lot::RwLock;
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::{
-    integrations::obsidian::VaultConfig, audio::{
+    audio::{
         capture::{init_audio_capture, run_vad_loop},
         onboarding, setup_audio_device,
         stt::stt_service::STTService,
         tts::TTSService,
         voice::SpeakerID,
-    }, commands::CommandConfig, config::Config, llm::LLMEngine, memory::MemoryManager, ritual::{RitualConfig, RitualContext}, state::{GlobalContext, SharedContext, Vitals}, worker::{Packet, WorkerContext, spawn_transcription_worker}
+    },
+    commands::CommandConfig,
+    config::Config,
+    integrations::obsidian::VaultConfig,
+    llm::LLMEngine,
+    memory::MemoryManager,
+    ritual::{RitualConfig, RitualContext},
+    state::{AudioDevices, GlobalContext, SharedContext, Vitals},
+    worker::{Packet, WorkerContext, spawn_transcription_worker},
 };
 
-mod utils;
-pub mod integrations;
 mod audio;
 mod commands;
 mod config;
+pub mod integrations;
 pub mod llm;
 mod memory;
 pub mod monitor;
 mod proactive;
-pub mod state;
-mod worker;
 pub mod ritual;
+pub mod state;
+mod utils;
+mod worker;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -144,11 +152,17 @@ pub async fn start_engine(
     let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
     let shared_memory = Arc::new(std::sync::Mutex::new(memory));
 
+    let audio_devices = RwLock::new(AudioDevices {
+        input: None,
+        output: None,
+    });
+
     let shared_context: SharedContext = Arc::new(GlobalContext {
         telemetry: RwLock::new(Vitals::default()),
         audio_player: RwLock::new(None),
         engine_state: Arc::new(AtomicU8::new(State::Idle as u8)),
         speaker: RwLock::new(speaker_id),
+        audio_devices
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
@@ -161,9 +175,13 @@ pub async fn start_engine(
         monitor::run_monitoring_loop(monitor_state).await;
     });
 
-    
     let vault_config = Arc::new(VaultConfig::new(PathBuf::from(&config.vault_path)));
-    let llm_engine = LLMEngine::new(paths.config_dir, Arc::clone(&shared_memory), config.clone(), vault_config.clone())?;
+    let llm_engine = LLMEngine::new(
+        paths.config_dir,
+        Arc::clone(&shared_memory),
+        config.clone(),
+        vault_config.clone(),
+    )?;
 
     let (stream, audio_buffer) =
         init_audio_capture(&device, stream_config).expect("failed to init audio capture");

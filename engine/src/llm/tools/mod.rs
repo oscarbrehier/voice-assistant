@@ -9,6 +9,7 @@ pub mod memory;
 pub mod screen;
 pub mod obsidian;
 pub mod project;
+pub mod audio;
 
 pub struct ToolContext<'a> {
     pub global_ctx: &'a SharedContext,

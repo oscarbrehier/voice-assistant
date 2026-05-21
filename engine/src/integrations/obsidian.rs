@@ -23,8 +23,8 @@ impl VaultConfig {
         }
     }
 
-    pub fn resolve_safe_path(&self, relative_name: &str) -> anyhow::Result<PathBuf> {
-        let mut target = self.root_path.clone();
+    pub fn resolve_safe_path(&self, base_dir: Option<&Path>, relative_name: &str) -> anyhow::Result<PathBuf> {
+        let mut target = base_dir.unwrap_or(&self.root_path).to_path_buf();
         target.push(relative_name);
 
         if !target.to_string_lossy().ends_with(".md") {
@@ -154,11 +154,16 @@ pub async fn read_note_content(path: &PathBuf) -> anyhow::Result<String> {
 }
 
 pub async fn create_note(
-    config: &VaultConfig,
+	ctx: &ToolContext<'_>,
     title: &str,
     content: &str,
 ) -> anyhow::Result<PathBuf> {
-    let safe_path = config.resolve_safe_path(title)?;
+	let target_base = match get_current_project(&ctx.memory)? {
+		Some(project) => Some(project.path),
+		None => None
+	};
+	
+    let safe_path = ctx.vault_config.resolve_safe_path(target_base.as_deref(), title)?;
 
     let mut file = OpenOptions::new()
         .create_new(true)

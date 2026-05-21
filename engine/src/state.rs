@@ -22,11 +22,17 @@ pub struct Vitals {
     pub top_processes: Vec<ProcessSnapshot>
 }
 
+pub struct AudioDevices {
+	pub input: Option<String>,
+	pub output: Option<String>
+}
+
 pub struct GlobalContext {
     pub telemetry: RwLock<Vitals>,
     pub audio_player: RwLock<Option<rodio::Player>>,
     pub engine_state: Arc<AtomicU8>,
     pub speaker: RwLock<SpeakerID>,
+    pub audio_devices: RwLock<AudioDevices>
 }
 
 impl GlobalContext {

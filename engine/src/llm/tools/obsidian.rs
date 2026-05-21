@@ -6,11 +6,11 @@ use tracing_subscriber::fmt::format;
 
 use crate::{
     integrations::obsidian::{
-        NoteEntry, VaultConfig, append_to_note, clean_path_display, create_note, get_recent_notes, list_vault_index, read_note_content, scoped_index, search_notes
+        NoteEntry, VaultConfig, append_to_note, clean_path_display, create_note, get_current_project, get_recent_notes, list_vault_index, read_note_content, scoped_index, search_notes
     },
     llm::{
         FunctionDefinition,
-        tools::{Tool, ToolContext, ToolOutcome},
+        tools::{Tool, ToolContext, ToolOutcome, project},
     },
 };
 
@@ -204,7 +204,7 @@ impl Tool for CreateNoteTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing content"))?;
 
-        let path = create_note(&ctx.vault_config, title, content).await?;
+        let path = create_note(&ctx, title, content).await?;
 
         Ok(ToolOutcome::ok(format!(
             "Create note '{}' at {}",
