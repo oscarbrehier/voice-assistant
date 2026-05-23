@@ -15,7 +15,7 @@ use crate::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
-            ToolContext, ToolOutcome, ToolRegistry, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, obsidian::{
+            ToolContext, ToolOutcome, ToolRegistry, audio::{ChangeOutputTool, ListOutputsTool}, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, obsidian::{
                 AppendToNoteTool, CreateNoteTool, GetRecentNotesTool, ReadNoteTool, SearchNotesTool,
             }, project::{GetCurrentProjectTool, GetProjectsTool, SetProjectTool}, screen::LookAtScreen, time::GetTimeTool
         },
@@ -184,6 +184,8 @@ impl LLMEngine {
         tools.register(GetProjectsTool);
         tools.register(GetCurrentProjectTool);
         tools.register(SetProjectTool);
+        tools.register(ListOutputsTool);
+        tools.register(ChangeOutputTool);
 
         tools
     }

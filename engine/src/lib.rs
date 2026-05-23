@@ -12,7 +12,7 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use parking_lot::RwLock;
 use serde::Serialize;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{broadcast};
 
 use crate::{
     audio::{
