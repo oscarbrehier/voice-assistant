@@ -107,9 +107,9 @@ pub async fn maybe_run_startup_ritual(
 
     theme_handle.fade_out_and_stop(config.fade_out_secs).await;
 
-    // if let Err(e) = eligibility::record_greeting_now(&ctx.memory) {
-    //     eprintln!("Failed to record greeting timestamp: {e}");
-    // }
+    if let Err(e) = eligibility::record_greeting_now(&ctx.memory) {
+        eprintln!("Failed to record greeting timestamp: {e}");
+    }
 
     Ok(())
 }

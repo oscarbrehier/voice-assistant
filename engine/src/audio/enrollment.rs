@@ -3,7 +3,12 @@ use std::time::Duration;
 use strsim::normalized_levenshtein;
 use tokio::sync::broadcast;
 
-use crate::{State, audio::{tts::TTSService, utils::resample_to_16khz}, state::SharedContext, worker::{Packet, WorkerContext}};
+use crate::{
+    State,
+    audio::{tts::TTSService, utils::resample_to_16khz},
+    state::SharedContext,
+    worker::{Packet, WorkerContext},
+};
 
 pub async fn handle_enrollment(
     transcription: String,
@@ -12,16 +17,14 @@ pub async fn handle_enrollment(
     tx: &broadcast::Sender<Packet>,
 ) {
     let enrollment_scripts = [
-        "The quick brown fox jumps over the lazy dog, but the rainy weather in Paris might slow him down today.",
-        "My voice is my unique password, and it grants me secure access to this system whenever I need it.",
-        "Hey assistant, set a timer for fifteen minutes and remind me to check the oven before it burns.",
-        "I'm currently integrating several different modules into this Rust project to make everything run smoothly and efficiently.",
-        "Confirm authorization now. Everything looks good on my end, so let's get started with the process.",
-        // "Beautiful azure skies stretched endlessly above the mountainous terrain, while golden sunlight filtered through scattered clouds.",
-        // "Technology evolves rapidly, but human creativity and intuition remain irreplaceable in solving complex problems.",
-        // "Please schedule a meeting for Thursday afternoon and send the presentation files to everyone on the team.",
-        // "The experimental prototype exceeded expectations during testing, demonstrating both reliability and exceptional performance metrics.",
-        // "Listening carefully to diverse perspectives helps us understand nuanced situations and make better informed decisions together.",
+        "Hey assistant, what's the time right now?",
+        "Lock the system, I'm stepping out for a bit.",
+        "Set a timer for fifteen minutes and remind me to check the oven.",
+        "My voice is my password, and it unlocks this system whenever I need it.",
+        "Could you search my notes for anything about the audio project?",
+        "The quick brown fox jumps over the lazy dog, while the rainy weather in Paris slows everyone down this morning.",
+        "I'm integrating several different modules into this Rust project, trying to make the whole thing run smoothly and efficiently.",
+        "Listening carefully to different perspectives helps me understand a situation and make a better, more informed decision overall.",
     ];
 
     let step = ctx
@@ -128,7 +131,7 @@ pub async fn run_self_calibration(
     tx: &broadcast::Sender<Packet>,
 ) -> anyhow::Result<()> {
     State::broadcast(State::Calibrating, &ctx.engine_state, tx);
-    
+
     let calibration_scripts = [
         "I am calibrating my voice recognition parameters.",
         "Testing the acoustic environment for echo cancellation.",

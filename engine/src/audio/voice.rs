@@ -16,7 +16,7 @@ impl EnrolmentState {
     pub fn new() -> Self {
         Self {
             current_step: 0,
-            max_steps: 5,
+            max_steps: 8,
             accumulated_embedding: Vec::new(),
             negative_embeddings: Vec::new(),
         }
@@ -119,13 +119,13 @@ impl SpeakerID {
         let mut sorted = self.recent_scores.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let percentile_85 = sorted[(sorted.len() as f32 * 0.85) as usize];
-
-        percentile_85.max(self.similarity_threshold)
+        let p = sorted[(sorted.len() as f32 * 0.70) as usize];
+        p.max(self.similarity_threshold)
+            .min(self.similarity_threshold + 0.03)
     }
 
     pub fn add_enrollment_sample(&mut self, audio_samples: &[f32]) -> anyhow::Result<bool> {
-        let current_embedding = self.extract_embedding(audio_samples)?;
+        let embeddings = self.extract_windowed_embedding(audio_samples)?;
 
         let is_finished = {
             let state = self
@@ -133,7 +133,7 @@ impl SpeakerID {
                 .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("No active enrolment session"))?;
 
-            state.accumulated_embedding.push(current_embedding);
+            state.accumulated_embedding.extend(embeddings);
             state.current_step += 1;
 
             state.current_step >= state.max_steps
@@ -244,7 +244,7 @@ impl SpeakerID {
             if positive_sim > 0.70 {
                 true
             } else {
-                (positive_sim + 0.15) >= max_negative_sim
+                positive_sim >= max_negative_sim + 0.10
             }
         };
 
@@ -319,6 +319,42 @@ impl SpeakerID {
         emb.iter_mut().for_each(|x| *x /= norm);
 
         Ok(emb)
+    }
+
+    fn extract_windowed_embedding(&mut self, samples: &[f32]) -> anyhow::Result<Vec<Vec<f32>>> {
+        const SR: usize = 16000;
+        let window = SR * 2;
+        let hop = SR;
+        let min_len = SR + SR / 2;
+
+        let mut out = Vec::new();
+
+        if samples.len() < window {
+            if samples.len() >= min_len {
+                out.push(self.extract_embedding(samples)?);
+            }
+        } else {
+            let mut start = 0;
+
+            while start + window <= samples.len() {
+                out.push(self.extract_embedding(&samples[start..start + window])?);
+                start += hop;
+            }
+
+            if start < samples.len() && samples.len() >= window {
+                let tail_start = samples.len() - window;
+
+                if tail_start > start.saturating_sub(hop) {
+                    out.push(self.extract_embedding(&samples[tail_start..])?);
+                }
+            }
+        }
+
+        if out.is_empty() {
+            out.push(self.extract_embedding(samples)?);
+        }
+
+        Ok(out)
     }
 
     fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {

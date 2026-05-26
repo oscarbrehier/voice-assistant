@@ -13,6 +13,7 @@ use crate::{
 pub struct GetProjectsTool;
 pub struct SetProjectTool;
 pub struct GetCurrentProjectTool;
+pub struct ClearProjectTool;
 
 #[async_trait]
 impl Tool for GetProjectsTool {
@@ -145,5 +146,50 @@ impl Tool for SetProjectTool {
                     .join(", ")
             ))),
         }
+    }
+}
+
+#[async_trait]
+impl Tool for ClearProjectTool {
+    fn name(&self) -> &'static str {
+        "clear_project"
+    }
+
+    fn definition(&self) -> FunctionDefinition {
+        FunctionDefinition {
+            name: self.name().to_string(),
+            description:
+                "Clear the active project so note operations search the whole vault again. \
+                Use when the user says 'stop working on the project', 'no project', \
+                'search everywhere', or 'clear the current project'."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        }
+    }
+
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        ctx: &ToolContext<'_>,
+    ) -> anyhow::Result<ToolOutcome> {
+        let has_deleted = {
+            let lock = ctx
+                .memory
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Memory lock poisoned"))?;
+            lock.state_delete("current_project")?
+        };
+
+        let message = if has_deleted {
+            "Cleared the active project. Notes now search the whole vault."
+        } else {
+            "No project was active — notes already search the whole vault."
+        };
+
+        Ok(ToolOutcome::ok(message.to_string()))
     }
 }

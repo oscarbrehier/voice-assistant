@@ -13,7 +13,7 @@ pub struct MemoryManager {
 pub enum MemoryType {
     Identity,
     Situational,
-    EngineState
+    EngineState,
 }
 
 impl MemoryManager {
@@ -233,6 +233,12 @@ impl MemoryManager {
         )?;
 
         Ok(())
+    }
+
+    pub fn state_delete(&self, key: &str) -> anyhow::Result<bool> {
+        let rows = self.conn
+            .execute("DELETE FROM engine_state WHERE key = ?", params![key])?;
+        Ok(rows > 0)
     }
 
     pub fn state_get_timestamp(&self, key: &str) -> anyhow::Result<Option<DateTime<Local>>> {

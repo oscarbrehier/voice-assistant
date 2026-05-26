@@ -5,21 +5,33 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Context};
+use anyhow::Context;
 use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    Opt, config::Config, integrations::obsidian::VaultConfig, llm::{
+    Opt,
+    config::Config,
+    integrations::obsidian::VaultConfig,
+    llm::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
-            ToolContext, ToolOutcome, ToolRegistry, audio::{ChangeOutputTool, ListOutputsTool}, memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool}, obsidian::{
+            ToolContext, ToolOutcome, ToolRegistry,
+            audio::{ChangeOutputTool, ListOutputsTool},
+            memory::{QueryMemoryTool, SaveMemoryTool, SearchMemoryTool},
+            obsidian::{
                 AppendToNoteTool, CreateNoteTool, GetRecentNotesTool, ReadNoteTool, SearchNotesTool,
-            }, project::{GetCurrentProjectTool, GetProjectsTool, SetProjectTool}, screen::LookAtScreen, time::GetTimeTool
+            },
+            project::{ClearProjectTool, GetCurrentProjectTool, GetProjectsTool, SetProjectTool},
+            screen::LookAtScreen,
+            time::GetTimeTool,
         },
-    }, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::Urgency
+    },
+    memory::{MemoryManager, MemoryType},
+    state::SharedContext,
+    worker::Urgency,
 };
 
 pub mod history;
@@ -172,18 +184,24 @@ impl LLMEngine {
         let mut tools = ToolRegistry::new();
 
         tools.register(GetTimeTool);
+
         tools.register(SearchMemoryTool);
         tools.register(QueryMemoryTool);
         tools.register(SaveMemoryTool);
+
         tools.register(LookAtScreen);
+
         tools.register(SearchNotesTool);
         tools.register(GetRecentNotesTool);
         tools.register(ReadNoteTool);
         tools.register(CreateNoteTool);
         tools.register(AppendToNoteTool);
+
         tools.register(GetProjectsTool);
         tools.register(GetCurrentProjectTool);
         tools.register(SetProjectTool);
+        tools.register(ClearProjectTool);
+
         tools.register(ListOutputsTool);
         tools.register(ChangeOutputTool);
 
@@ -225,11 +243,21 @@ impl LLMEngine {
 
         let vitals_str = global_ctx.get_vitals_snapshot();
 
+        let current_project = {
+            let lock = self
+                .memory
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Memory lock poisoned"))?;
+            lock.state_get("current_project")?
+                .unwrap_or("No active project".to_string())
+        };
+
         let final_system_prompt = self
             .system_prompt_template
             .replace("{{vitals}}", &vitals_str)
             .replace("{{core_identity}}", &self.core_identity_cache)
-            .replace("{{retrieved_memories}}", &situational_str);
+            .replace("{{retrieved_memories}}", &situational_str)
+            .replace("{{current_project}}", &current_project);
 
         self.history.add_user_input(text);
         self.history.ensure_valid_start();
@@ -240,7 +268,7 @@ impl LLMEngine {
 
         for _iteration in 0..max_iterations {
             let iter_start = Instant::now();
-            
+
             let response = call_mistral_with_tools(
                 final_system_prompt.clone(),
                 &mut self.history.messages,
@@ -393,7 +421,11 @@ impl LLMEngine {
         }
     }
 
-    pub async fn generate_greeting(&mut self, config: &Config, project_context: String) -> anyhow::Result<Option<String>> {
+    pub async fn generate_greeting(
+        &mut self,
+        config: &Config,
+        project_context: String,
+    ) -> anyhow::Result<Option<String>> {
         let current_time = Local::now();
         let weekday = current_time.date_naive().weekday();
 
