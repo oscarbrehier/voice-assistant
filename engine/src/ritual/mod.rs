@@ -9,6 +9,9 @@ use tokio::sync::broadcast;
 use crate::{
     audio::tts::TTSService,
     config::Config,
+    integrations::obsidian::{
+        get_current_project, get_recent_notes, list_index_at, read_note_content, summarize_note,
+    },
     llm::LLMEngine,
     memory::MemoryManager,
     state::SharedContext,
@@ -36,6 +39,31 @@ pub struct RitualContext {
     pub tx: broadcast::Sender<Packet>,
 }
 
+pub async fn gather_project_context(ctx: &WorkerContext) -> Option<String> {
+    let project = get_current_project(&ctx.memory).ok()??;
+
+    let index = list_index_at(&project.path).ok()?;
+    if index.is_empty() {
+        return Some(format!(
+            "Current project: {}. No notes yet.",
+            project.display_name
+        ));
+    }
+
+    let recent = get_recent_notes(&index, 2).ok()?;
+
+    let mut parts = vec![format!("Current project: {}", project.display_name)];
+    for note in recent {
+        println!("recent note: {}", note.display_name);
+        if let Ok(content) = read_note_content(&note.path).await {
+            let summary = summarize_note(&content);
+            parts.push(format!("Note '{}':\n{}", note.display_name, summary));
+        }
+    }
+
+    Some(parts.join("\n"))
+}
+
 pub async fn maybe_run_startup_ritual(
     config: RitualConfig,
     ctx: &mut WorkerContext,
@@ -52,7 +80,17 @@ pub async fn maybe_run_startup_ritual(
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let greeting = match ctx.llm_engine.generate_greeting(&ctx.config).await? {
+    let project_context = gather_project_context(&ctx)
+        .await
+        .unwrap_or_else(|| "No active project.".to_string());
+
+    println!("project context: {}", &project_context);
+
+    let greeting = match ctx
+        .llm_engine
+        .generate_greeting(&ctx.config, project_context)
+        .await?
+    {
         Some(text) => text,
         None => return Ok(()),
     };
@@ -69,9 +107,9 @@ pub async fn maybe_run_startup_ritual(
 
     theme_handle.fade_out_and_stop(config.fade_out_secs).await;
 
-    if let Err(e) = eligibility::record_greeting_now(&ctx.memory) {
-        eprintln!("Failed to record greeting timestamp: {e}");
-    }
+    // if let Err(e) = eligibility::record_greeting_now(&ctx.memory) {
+    //     eprintln!("Failed to record greeting timestamp: {e}");
+    // }
 
     Ok(())
 }

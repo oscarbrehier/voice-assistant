@@ -393,7 +393,7 @@ impl LLMEngine {
         }
     }
 
-    pub async fn generate_greeting(&mut self, config: &Config) -> anyhow::Result<Option<String>> {
+    pub async fn generate_greeting(&mut self, config: &Config, project_context: String) -> anyhow::Result<Option<String>> {
         let current_time = Local::now();
         let weekday = current_time.date_naive().weekday();
 
@@ -402,7 +402,7 @@ impl LLMEngine {
             .replace("{{time}}", &current_time.format("%R").to_string())
             .replace("{{day_of_week}}", &weekday.to_string())
             .replace("{{date}}", &current_time.format("%-d %B").to_string())
-            .replace("{{locale}}", &config.locale);
+            .replace("{{project_context}}", &project_context);
 
         let result = call_mistral_stateless(prompt, "proceed".into()).await?;
 

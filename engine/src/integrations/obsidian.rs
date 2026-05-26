@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::SystemTime};
 
-use anyhow::{Context, Ok, anyhow};
+use anyhow::{Context, anyhow};
 use strsim::jaro_winkler;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
@@ -11,6 +11,7 @@ use walkdir::WalkDir;
 use crate::llm::tools::ToolContext;
 use crate::memory::MemoryManager;
 use crate::utils::search::fuzzy_search;
+use crate::worker::WorkerContext;
 
 pub struct VaultConfig {
     pub root_path: PathBuf,
@@ -23,7 +24,11 @@ impl VaultConfig {
         }
     }
 
-    pub fn resolve_safe_path(&self, base_dir: Option<&Path>, relative_name: &str) -> anyhow::Result<PathBuf> {
+    pub fn resolve_safe_path(
+        &self,
+        base_dir: Option<&Path>,
+        relative_name: &str,
+    ) -> anyhow::Result<PathBuf> {
         let mut target = base_dir.unwrap_or(&self.root_path).to_path_buf();
         target.push(relative_name);
 
@@ -85,7 +90,7 @@ pub fn get_current_project(memory: &Arc<Mutex<MemoryManager>>) -> anyhow::Result
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| s.clone());
-            
+
             Ok(Some(Project { display_name, path }))
         }
         None => Ok(None),
@@ -99,13 +104,10 @@ pub struct NoteEntry {
     pub modified_time: SystemTime,
 }
 
-fn list_index_at(root: &Path) -> anyhow::Result<Vec<NoteEntry>> {
+pub fn list_index_at(root: &Path) -> anyhow::Result<Vec<NoteEntry>> {
     let mut note_entries = Vec::new();
 
-    for entry in WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "md") {
             if let Some(filename) = path.file_name() {
@@ -124,14 +126,14 @@ fn list_index_at(root: &Path) -> anyhow::Result<Vec<NoteEntry>> {
 }
 
 pub fn list_vault_index(config: &VaultConfig) -> anyhow::Result<Vec<NoteEntry>> {
-	list_index_at(&config.root_path)
+    list_index_at(&config.root_path)
 }
 
 pub fn scoped_index(ctx: &ToolContext) -> anyhow::Result<Vec<NoteEntry>> {
-	match get_current_project(&ctx.memory)? {
-		Some(project) => list_index_at(&project.path),
-		None => list_vault_index(&ctx.vault_config)
-	}
+    match get_current_project(&ctx.memory)? {
+        Some(project) => list_index_at(&project.path),
+        None => list_vault_index(&ctx.vault_config),
+    }
 }
 
 pub fn search_notes(query: &str, index: &[NoteEntry]) -> Vec<NoteEntry> {
@@ -154,16 +156,18 @@ pub async fn read_note_content(path: &PathBuf) -> anyhow::Result<String> {
 }
 
 pub async fn create_note(
-	ctx: &ToolContext<'_>,
+    ctx: &ToolContext<'_>,
     title: &str,
     content: &str,
 ) -> anyhow::Result<PathBuf> {
-	let target_base = match get_current_project(&ctx.memory)? {
-		Some(project) => Some(project.path),
-		None => None
-	};
-	
-    let safe_path = ctx.vault_config.resolve_safe_path(target_base.as_deref(), title)?;
+    let target_base = match get_current_project(&ctx.memory)? {
+        Some(project) => Some(project.path),
+        None => None,
+    };
+
+    let safe_path = ctx
+        .vault_config
+        .resolve_safe_path(target_base.as_deref(), title)?;
 
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -234,4 +238,54 @@ pub async fn smart_append_to_section(
 
 fn format_entry(header: &str, text: &str) -> String {
     format!("> {}\n> {}\n", header, text)
+}
+
+pub fn summarize_note(content: &str) -> String {
+    let mut lines = Vec::new();
+
+    for raw in content.lines() {
+        let t = raw.trim_start();
+
+        if t.is_empty() || t.starts_with('>') {
+            continue;
+        }
+
+        if t.starts_with('#') {
+            lines.push(t.to_string());
+            continue;
+        }
+
+        let is_bullet = t.starts_with("* ")
+            || t.starts_with("- ")
+            || t.starts_with("+ ")
+            || t.starts_with("- [ ]")
+            || t.starts_with("- [x]");
+
+        if is_bullet {
+            let body = t.trim_start_matches(['*', '-', '+', ' ']);
+            let is_done = body.starts_with("~~") || t.starts_with("- [x]");
+            
+            if is_done {
+                continue;
+            }
+            
+            if body.is_empty() {
+                continue;
+            }
+            
+            lines.push(t.to_string());
+        }
+    }
+
+    let capped: Vec<&String> = lines.iter().take(12).collect();
+
+    if capped.is_empty() {
+        return content.chars().take(500).collect();
+    }
+
+    capped
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
