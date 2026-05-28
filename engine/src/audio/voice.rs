@@ -240,12 +240,10 @@ impl SpeakerID {
 
         let is_distinctive = if self.negative_embeddings.is_empty() {
             true
+        } else if positive_sim > 0.70 {
+            true
         } else {
-            if positive_sim > 0.70 {
-                true
-            } else {
-                positive_sim >= max_negative_sim + 0.10
-            }
+            positive_sim >= max_negative_sim + 0.10
         };
 
         let decision = is_positive_enough && is_distinctive;

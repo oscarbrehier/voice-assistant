@@ -167,7 +167,7 @@ impl TTSService {
         let response = response.trim();
         if let Some(path) = response.strip_prefix("DONE ") {
             Ok(path.to_string())
-        } else if let Some(err) = response.strip_prefix("ERROR ") {
+        } else if let Some(err) = response.strip_prefix("ERROR :") {
             anyhow::bail!("TTS error: {}", err)
         } else {
             anyhow::bail!("Unexpected TTS response: {}", response)
@@ -179,7 +179,9 @@ impl TTSService {
         context: SharedContext,
     ) -> anyhow::Result<()> {
         while let Some(path) = rx.blocking_recv() {
-            play_mp3_audio(&path, context.clone())?;
+            let play_result = play_mp3_audio(&path, context.clone());
+            let _ = std::fs::remove_file(&path);
+            play_result?;
         }
 
         Ok(())

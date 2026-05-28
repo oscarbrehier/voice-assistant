@@ -11,7 +11,7 @@ pub struct InputDeviceInfo {
 
 pub fn list_input_devices() -> Result<Vec<InputDeviceInfo>, anyhow::Error> {
     let host = cpal::default_host();
-    let devices = host.devices()?.enumerate().collect::<Vec<_>>();
+    let devices = host.input_devices()?.enumerate().collect::<Vec<_>>();
 
     let mut result = Vec::new();
     for (i, device) in devices {

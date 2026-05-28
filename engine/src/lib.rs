@@ -146,7 +146,7 @@ pub async fn start_engine(
     let speaker_id = SpeakerID::new(
         "engine/models/voxceleb_ECAPA1024.onnx",
         Some("profiles/profile_1.bin"),
-        0.55,
+        0.46,
     )?;
 
     let memory = MemoryManager::new(PathBuf::from("memories.db"))?;

@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering}
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -18,7 +18,8 @@ use tokio::sync::broadcast;
 use crate::{
     State,
     audio::utils::{BiquadFilter, has_speech, to_mono},
-    state::SharedContext, worker::Packet,
+    state::SharedContext,
+    worker::Packet,
 };
 
 pub type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
@@ -211,11 +212,23 @@ pub fn run_vad_loop(
 
     let mut bandpass = BiquadFilter::new_bandpass(2500.0, sample_rate as f32, 1.7);
 
+    let mut prev_state = State::Idle;
+    let mut speaking_ended_at: Option<std::time::Instant> = None;
+    let post_speech_cooldown = Duration::from_millis(300);
+
     while running.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(10));
 
         let current_state_u8 = ctx.engine_state.load(Ordering::SeqCst);
         let current_state = State::from_u8(current_state_u8).unwrap_or(State::Idle);
+
+        if prev_state == State::Speaking && current_state != State::Speaking {
+            speaking_ended_at = Some(std::time::Instant::now());
+            audio_buffer.lock().unwrap().clear();
+            circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
+            speech_buffer.clear();
+        }
+        prev_state = current_state.clone();
 
         let should_ignore = current_state == State::Processing
             || (current_state == State::Speaking && !ctx.speaker.read().is_enrolled());
@@ -265,7 +278,7 @@ pub fn run_vad_loop(
             if last_speech_instant.elapsed() > timeout {
                 State::broadcast(State::Idle, &ctx.engine_state, &tx);
             }
-        }   
+        }
 
         if current_state == State::Recording {
             if last_speech_instant.elapsed() > Duration::from_secs(5) {
@@ -320,6 +333,14 @@ pub fn run_vad_loop(
                 if current_state == State::Speaking && current_state != State::Calibrating {
                     let is_enrolled = ctx.speaker.read().is_enrolled();
 
+                    let in_cooldown = speaking_ended_at
+                        .map(|t| t.elapsed() < post_speech_cooldown)
+                        .unwrap_or(false);
+
+                    if in_cooldown {
+                        continue;
+                    }
+
                     if is_enrolled {
                         let candidate_audio = circular_buffer.get_all();
 
@@ -349,7 +370,7 @@ pub fn run_vad_loop(
                 // if updated_state == State::Recording as u8 && circular_buffer.full {
                 //     let wake_word_audio = circular_buffer.get_all();
                 //     let _ = tx.send(Packet::WakeWordCheck(wake_word_audio.clone()));
-                    
+
                 //     circular_buffer = CircularBuffer::new(wake_word_duration_secs, sample_rate);
                 // }
 

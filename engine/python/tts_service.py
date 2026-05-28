@@ -2,19 +2,17 @@ import asyncio
 import sys
 import traceback
 import edge_tts
-
+import uuid
 
 class TTSService:
     def __init__(self, voice="en-US-AvaMultilingualNeural"):
         self.voice = voice
-        self.counter = 0
 
-    def next_output_path(self):
-        self.counter += 1
-        return f"output_{self.counter}.mp3"
+    def generate_output_path(self):
+        return f"output_{uuid.uuid4()}.mp3"
 
     async def synthesize(self, text):
-        output_path = self.next_output_path()
+        output_path = self.generate_output_path()
         communicate = edge_tts.Communicate(text, self.voice)
 
         await communicate.save(output_path)
