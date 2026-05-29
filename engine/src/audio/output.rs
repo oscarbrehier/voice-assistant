@@ -1,9 +1,55 @@
 use cpal::traits::HostTrait;
-use rodio::{Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player};
-use std::{io::BufReader, time::Duration};
+use rodio::{Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, Source};
+use std::{
+    io::BufReader,
+    num::NonZero,
+    sync::{Arc, atomic::AtomicUsize},
+    time::Duration,
+};
 use strsim::jaro_winkler;
 
 use crate::state::SharedContext;
+
+struct TappedSource<S, F>
+where
+    S: Source<Item = f32>,
+    F: FnMut(f32),
+{
+    inner: S,
+    tap: F,
+}
+
+impl<S, F> Iterator for TappedSource<S, F>
+where
+    S: Source<Item = f32>,
+    F: FnMut(f32),
+{
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let s = self.inner.next()?;
+        (self.tap)(s);
+        Some(s)
+    }
+}
+
+impl<S, F> Source for TappedSource<S, F>
+where
+    S: Source<Item = f32>,
+    F: FnMut(f32),
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+    fn channels(&self) -> NonZero<u16> {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> NonZero<u32> {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.inner.total_duration()
+    }
+}
 
 pub fn get_device_from_name(name: &str) -> anyhow::Result<cpal::Device> {
     let host = cpal::default_host();
@@ -52,7 +98,23 @@ pub fn play_mp3_audio(path: &str, context: SharedContext) -> anyhow::Result<()> 
     let source = Decoder::new(BufReader::new(file))
         .map_err(|e| anyhow::anyhow!("Failed to decode mp3: {e}"))?;
 
-    player.append(source);
+    let render_tx = context.aec_render_tx.clone();
+    let mut render_chunk: Vec<f32> = Vec::with_capacity(480);
+
+    let tapped = TappedSource {
+        inner: source,
+        tap: move |s: f32| {
+            render_chunk.push(s);
+            render_chunk.push(s);
+            if render_chunk.len() >= 480 {
+                let chunk = std::mem::replace(&mut render_chunk, Vec::with_capacity(480));
+                let _ = render_tx.try_send(chunk);
+            }
+        },
+    };
+
+    player.append(tapped);
+
 
     {
         let mut lock = context.audio_player.write();

@@ -12,6 +12,8 @@ test/*
 **/*.rpw
 **/transcription.txt
 
+bin/
+
 **/.env
 
 *.stackdump

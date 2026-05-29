@@ -1,7 +1,8 @@
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
@@ -12,11 +13,12 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use parking_lot::RwLock;
 use serde::Serialize;
-use tokio::sync::{broadcast};
+use tokio::sync::broadcast;
 
 use crate::{
     audio::{
-        capture::{init_audio_capture, run_vad_loop},
+        aec,
+        capture::{AudioBuffer, init_audio_capture, run_vad_loop},
         onboarding, setup_audio_device,
         stt::stt_service::STTService,
         tts::TTSService,
@@ -146,7 +148,7 @@ pub async fn start_engine(
     let speaker_id = SpeakerID::new(
         "engine/models/voxceleb_ECAPA1024.onnx",
         Some("profiles/profile_1.bin"),
-        0.46,
+        0.52,
     )?;
 
     let memory = MemoryManager::new(PathBuf::from("memories.db"))?;
@@ -157,12 +159,17 @@ pub async fn start_engine(
         output: None,
     });
 
+    let cleaned_audio_buffer: AudioBuffer = Arc::new(Mutex::new(VecDeque::new()));
+    let (aec_render_tx, aec_render_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(64);
+
     let shared_context: SharedContext = Arc::new(GlobalContext {
         telemetry: RwLock::new(Vitals::default()),
         audio_player: RwLock::new(None),
         engine_state: Arc::new(AtomicU8::new(State::Idle as u8)),
         speaker: RwLock::new(speaker_id),
-        audio_devices
+        audio_devices,
+        cleaned_audio_buffer: cleaned_audio_buffer.clone(),
+        aec_render_tx,
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
@@ -255,13 +262,21 @@ pub async fn start_engine(
         proactive::run_loop(proactive_ctx, proactive_tx).await;
     });
 
+    let aec_running = running.clone();
+    let aec_raw = audio_buffer.clone();
+    let aec_clenead = cleaned_audio_buffer.clone();
+
+    std::thread::spawn(move || {
+        aec::run_aec_loop(aec_running, aec_raw, aec_clenead, aec_render_rx);
+    });
+
     let engine_tx = tx_internal.clone();
     let vad_context = shared_context.clone();
 
     tokio::task::spawn_blocking(move || {
         run_vad_loop(
             running,
-            audio_buffer,
+            cleaned_audio_buffer.clone(),
             engine_tx,
             sample_rate,
             channels,

@@ -84,8 +84,6 @@ pub async fn maybe_run_startup_ritual(
         .await
         .unwrap_or_else(|| "No active project.".to_string());
 
-    println!("project context: {}", &project_context);
-
     let greeting = match ctx
         .llm_engine
         .generate_greeting(&ctx.config, project_context)

@@ -125,6 +125,8 @@ pub fn init_audio_capture(
     let audio_buffer = Arc::new(Mutex::new(VecDeque::new()));
     let audio_buffer_clone = audio_buffer.clone();
 
+    println!("init audio capture sample rate: {}", config.sample_rate());
+    
     let err_fn = move |err| {
         eprintln!("An error occurred during stream: {err}");
     };

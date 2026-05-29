@@ -4,7 +4,7 @@ use std::sync::{Arc, atomic::AtomicU8};
 use serde::Serialize;
 
 use crate::{
-    audio::{output::get_device_from_name, voice::SpeakerID},
+    audio::{capture::AudioBuffer, output::get_device_from_name, voice::SpeakerID},
     memory::MemoryManager,
 };
 
@@ -45,6 +45,8 @@ pub struct GlobalContext {
     pub engine_state: Arc<AtomicU8>,
     pub speaker: RwLock<SpeakerID>,
     pub audio_devices: RwLock<AudioDevices>,
+    pub cleaned_audio_buffer: AudioBuffer,
+    pub aec_render_tx: std::sync::mpsc::SyncSender<Vec<f32>>
 }
 
 impl GlobalContext {
