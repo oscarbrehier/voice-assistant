@@ -145,38 +145,38 @@ pub fn spawn_transcription_worker(
                                 continue;
                             }
 
-                            let is_verified = {
-                                let mut handle = ctx.global_ctx.speaker.write();
-                                handle
-                                    .verify_with_negative_check(&data, ctx.sample_rate)
-                                    .unwrap_or(false)
-                            };
+                            // let is_verified = {
+                            //     let mut handle = ctx.global_ctx.speaker.write();
+                            //     handle
+                            //         .verify_with_negative_check(&data, ctx.sample_rate)
+                            //         .unwrap_or(false)
+                            // };
 
-                            if !is_verified {
-                                println!("Unauthorized speaker detected");
-                                State::broadcast(State::Idle, &ctx.global_ctx.engine_state, &tx);
-                                continue;
-                            }
+                            // if !is_verified {
+                            //     println!("Unauthorized speaker detected");
+                            //     State::broadcast(State::Idle, &ctx.global_ctx.engine_state, &tx);
+                            //     continue;
+                            // }
 
                             println!("Authorized speaker");
 
                             State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
                         }
 
-                        if current_state == State::Active as u8 {
-                            let is_verified = {
-                                let mut handle = ctx.global_ctx.speaker.write();
-                                handle
-                                    .verify_with_negative_check(&data, ctx.sample_rate)
-                                    .unwrap_or(false)
-                            };
+                        // if current_state == State::Active as u8 {
+                        //     let is_verified = {
+                        //         let mut handle = ctx.global_ctx.speaker.write();
+                        //         handle
+                        //             .verify_with_negative_check(&data, ctx.sample_rate)
+                        //             .unwrap_or(false)
+                        //     };
 
-                            if !is_verified {
-                                println!("Unauthorized speaker detected");
-                                State::broadcast(State::Idle, &ctx.global_ctx.engine_state, &tx);
-                                continue;
-                            }
-                        }
+                        //     if !is_verified {
+                        //         println!("Unauthorized speaker detected");
+                        //         State::broadcast(State::Idle, &ctx.global_ctx.engine_state, &tx);
+                        //         continue;
+                        //     }
+                        // }
 
                         let wake_word = ctx.config.name.to_lowercase();
                         let lower_t = transcription.to_lowercase();

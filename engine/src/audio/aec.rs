@@ -4,26 +4,30 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, TryRecvError},
-    }, time::Duration,
+    },
+    time::Duration,
 };
 
 use aec3::voip::VoipAec3;
 
-use crate::audio::capture::AudioBuffer;
+use crate::audio::{capture::AudioBuffer, wav_dump::WavDump};
 
 const CAPTURE_RATE: u32 = 48_000;
-const RENDER_RATE: u32 = 48_000;
+const RENDER_RATE: u32 = 24_000;
 const CAPTURE_FRAME: usize = 480;
-const RENDER_FRAME: usize = 480;
+const RENDER_FRAME: usize = 240;
 
 pub fn run_aec_loop(
     running: Arc<AtomicBool>,
     raw_mic: AudioBuffer,
+    mic_channels: usize,
     cleaned: AudioBuffer,
     render_rx: Receiver<Vec<f32>>,
 ) {
     let mut aec = match VoipAec3::builder(CAPTURE_RATE as usize, 1, 1)
+        .render_sample_rate_hz(24_000)
         .enable_high_pass(true)
+        .enable_noise_suppression(true)
         .build()
     {
         Ok(a) => a,
@@ -38,6 +42,10 @@ pub fn run_aec_loop(
 
     let mut out_frame = vec![0.0f32; CAPTURE_FRAME];
 
+    let raw_dump = Arc::new(WavDump::new("aec_raw.wav", CAPTURE_RATE).ok());
+    let render_dump = Arc::new(WavDump::new("aec_render.wav", RENDER_RATE).ok());
+    let cleaned_dump = Arc::new(WavDump::new("aec_cleaned.wav", CAPTURE_RATE).ok());
+
     while running.load(Ordering::SeqCst) {
         loop {
             match render_rx.try_recv() {
@@ -50,8 +58,22 @@ pub fn run_aec_loop(
         {
             let mut q = raw_mic.lock().unwrap();
 
-            while let Some(s) = q.pop_front() {
-                capture_acc.push_back(s);
+            if mic_channels == 1 {
+                while let Some(s) = q.pop_front() {
+                    capture_acc.push_back(s);
+                }
+            } else {
+                let complete_frames = q.len() / mic_channels;
+
+                for _ in 0..complete_frames {
+                    let mut sum = 0.0f32;
+
+                    for _ in 0..mic_channels {
+                        sum += q.pop_front().unwrap();
+                    }
+
+                    capture_acc.push_back(sum / mic_channels as f32);
+                }
             }
         }
 
@@ -71,8 +93,19 @@ pub fn run_aec_loop(
                 vec![0.0; RENDER_FRAME]
             };
 
+            if let Some(d) = raw_dump.as_ref().as_ref() {
+                d.write_samples(&cap_frame);
+            }
+            if let Some(d) = render_dump.as_ref().as_ref() {
+                d.write_samples(&render_frame);
+            }
+
             match aec.process(&cap_frame, Some(&render_frame), false, &mut out_frame) {
                 Ok(_metrics) => {
+                    if let Some(d) = cleaned_dump.as_ref().as_ref() {
+                        d.write_samples(&out_frame);
+                    }
+
                     let mut out = cleaned.lock().unwrap();
                     out.extend(out_frame.iter().copied());
                 }
@@ -84,7 +117,7 @@ pub fn run_aec_loop(
                 }
             }
         }
-        
+
         std::thread::sleep(Duration::from_millis(5));
     }
 }

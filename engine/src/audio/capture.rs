@@ -189,6 +189,8 @@ pub fn run_vad_loop(
     assistant_active: Arc<AtomicBool>,
     ctx: SharedContext,
 ) {
+	println!("[capture] channels={} sample_rate={}", channels, sample_rate); 
+	
     let vad_chunk_duration_spec = 1;
     let pulse_chunk_duration_ms = 50;
     let overlap_duration = 0.15;

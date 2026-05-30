@@ -105,7 +105,6 @@ pub fn play_mp3_audio(path: &str, context: SharedContext) -> anyhow::Result<()> 
         inner: source,
         tap: move |s: f32| {
             render_chunk.push(s);
-            render_chunk.push(s);
             if render_chunk.len() >= 480 {
                 let chunk = std::mem::replace(&mut render_chunk, Vec::with_capacity(480));
                 let _ = render_tx.try_send(chunk);

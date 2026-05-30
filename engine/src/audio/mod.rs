@@ -13,6 +13,7 @@ pub mod voice;
 pub mod onboarding;
 pub mod enrollment;
 pub mod aec;
+pub mod wav_dump;
 
 pub fn setup_audio_device(
     device_index: Option<usize>,

@@ -264,10 +264,10 @@ pub async fn start_engine(
 
     let aec_running = running.clone();
     let aec_raw = audio_buffer.clone();
-    let aec_clenead = cleaned_audio_buffer.clone();
+    let aec_cleaned = cleaned_audio_buffer.clone();
 
     std::thread::spawn(move || {
-        aec::run_aec_loop(aec_running, aec_raw, aec_clenead, aec_render_rx);
+        aec::run_aec_loop(aec_running, aec_raw, channels, aec_cleaned, aec_render_rx);
     });
 
     let engine_tx = tx_internal.clone();
@@ -279,7 +279,7 @@ pub async fn start_engine(
             cleaned_audio_buffer.clone(),
             engine_tx,
             sample_rate,
-            channels,
+            1,
             assistant_active,
             vad_context,
         );
