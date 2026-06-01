@@ -18,7 +18,7 @@ use tokio::sync::broadcast;
 use crate::{
     audio::{
         aec,
-        capture::{AudioBuffer, init_audio_capture, run_vad_loop},
+        capture::{AudioBuffer, init_audio_capture, init_loopback_capture, run_vad_loop},
         onboarding, setup_audio_device,
         stt::stt_service::STTService,
         tts::TTSService,
@@ -117,14 +117,14 @@ pub struct EngineEvent {
 
 pub async fn start_engine(
     paths: EnginePaths,
-    device: Option<usize>,
-) -> anyhow::Result<(broadcast::Sender<EngineEvent>, Stream)> {
+    input_device_index: Option<usize>,
+    output_device_index: Option<usize>,
+) -> anyhow::Result<(broadcast::Sender<EngineEvent>, Stream, Stream)> {
     tracing_subscriber::fmt::init();
 
     let env_file = paths.config_dir.join(".env");
     let config_file = paths.config_dir.join("config.json");
     let commands_file = paths.config_dir.join("commands.json");
-    let prompt_path = paths.config_dir.join("system_prompt.md");
 
     if let Err(e) = dotenvy::from_path(&env_file) {
         eprintln!("Failed to load .env from {:?}: {}", env_file, e)
@@ -141,9 +141,9 @@ pub async fn start_engine(
 
     let config = Config::load(config_file)?;
 
-    let (device, stream_config) = setup_audio_device(device)?;
-    let sample_rate = stream_config.sample_rate() as usize;
-    let channels = stream_config.channels() as usize;
+    let devices = setup_audio_device(input_device_index, output_device_index)?;
+    let sample_rate = devices.input_config.sample_rate() as usize;
+    let channels = devices.input_config.channels() as usize;
 
     let speaker_id = SpeakerID::new(
         "engine/models/voxceleb_ECAPA1024.onnx",
@@ -169,7 +169,7 @@ pub async fn start_engine(
         speaker: RwLock::new(speaker_id),
         audio_devices,
         cleaned_audio_buffer: cleaned_audio_buffer.clone(),
-        aec_render_tx,
+        aec_render_tx: aec_render_tx.clone(),
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;
@@ -191,7 +191,7 @@ pub async fn start_engine(
     )?;
 
     let (stream, audio_buffer) =
-        init_audio_capture(&device, stream_config).expect("failed to init audio capture");
+        init_audio_capture(&devices.input_device, devices.input_config).expect("failed to init audio capture");
 
     let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
     let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
@@ -261,13 +261,17 @@ pub async fn start_engine(
     tokio::spawn(async move {
         proactive::run_loop(proactive_ctx, proactive_tx).await;
     });
-
+    
     let aec_running = running.clone();
     let aec_raw = audio_buffer.clone();
     let aec_cleaned = cleaned_audio_buffer.clone();
+    let aec_mic_channels = channels;
 
+    let loopback_channels = devices.loopback_config.channels() as usize;
+    let loopback_stream = init_loopback_capture(&devices.loopback_device, devices.loopback_config, aec_render_tx.clone(), loopback_channels)?;
+    
     std::thread::spawn(move || {
-        aec::run_aec_loop(aec_running, aec_raw, channels, aec_cleaned, aec_render_rx);
+        aec::run_aec_loop(aec_running, aec_raw, aec_mic_channels, aec_cleaned, aec_render_rx);
     });
 
     let engine_tx = tx_internal.clone();
@@ -295,5 +299,5 @@ pub async fn start_engine(
 
     let _ = tx_internal.send(Packet::StartupRitual);
 
-    Ok((tx_external, stream))
+    Ok((tx_external, stream, loopback_stream))
 }

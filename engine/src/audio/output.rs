@@ -98,23 +98,8 @@ pub fn play_mp3_audio(path: &str, context: SharedContext) -> anyhow::Result<()> 
     let source = Decoder::new(BufReader::new(file))
         .map_err(|e| anyhow::anyhow!("Failed to decode mp3: {e}"))?;
 
-    let render_tx = context.aec_render_tx.clone();
-    let mut render_chunk: Vec<f32> = Vec::with_capacity(480);
-
-    let tapped = TappedSource {
-        inner: source,
-        tap: move |s: f32| {
-            render_chunk.push(s);
-            if render_chunk.len() >= 480 {
-                let chunk = std::mem::replace(&mut render_chunk, Vec::with_capacity(480));
-                let _ = render_tx.try_send(chunk);
-            }
-        },
-    };
-
-    player.append(tapped);
-
-
+    player.append(source);
+    
     {
         let mut lock = context.audio_player.write();
         *lock = Some(player);

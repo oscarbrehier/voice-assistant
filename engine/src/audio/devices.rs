@@ -3,16 +3,13 @@ use cpal::{
     traits::{DeviceTrait, HostTrait},
 };
 
-pub struct InputDeviceInfo {
+pub struct DeviceInfo {
     pub index: usize,
     pub name: String,
     pub device: Device,
 }
 
-pub fn list_input_devices() -> Result<Vec<InputDeviceInfo>, anyhow::Error> {
-    let host = cpal::default_host();
-    let devices = host.input_devices()?.enumerate().collect::<Vec<_>>();
-
+pub fn list_devices(devices: Vec<(usize, Device)>) -> Result<Vec<DeviceInfo>, anyhow::Error> {
     let mut result = Vec::new();
     for (i, device) in devices {
         let name = device
@@ -20,7 +17,7 @@ pub fn list_input_devices() -> Result<Vec<InputDeviceInfo>, anyhow::Error> {
             .map(|desc| desc.name().to_string())
             .map_err(|e| anyhow::anyhow!("Failed to get device name: {}", e))?;
 
-        result.push(InputDeviceInfo {
+        result.push(DeviceInfo {
             index: i,
             name,
             device,
@@ -31,7 +28,7 @@ pub fn list_input_devices() -> Result<Vec<InputDeviceInfo>, anyhow::Error> {
 }
 
 pub fn select_device_by_index(
-    devices: &[InputDeviceInfo],
+    devices: &[DeviceInfo],
     index: usize,
 ) -> Result<&Device, anyhow::Error> {
     devices

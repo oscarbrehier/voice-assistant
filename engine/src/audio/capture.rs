@@ -3,6 +3,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc::SyncSender,
     },
     thread,
     time::{Duration, Instant},
@@ -118,6 +119,58 @@ impl TransientTracker {
     }
 }
 
+pub fn build_input_stream_f32<F>(
+    device: &Device,
+    config: SupportedStreamConfig,
+    mut on_samples: F,
+) -> anyhow::Result<Stream>
+where
+    F: FnMut(&[f32]) + Send + 'static,
+{
+    let err_fn = |err| eprintln!("audio stream error: {err}");
+
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::I8 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i8], _: &_| {
+                let converted: Vec<f32> = data.iter().map(|&s| s as f32 / 128.0).collect();
+                on_samples(&converted);
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i16], _: &_| {
+                let converted: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
+                on_samples(&converted);
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::I32 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i32], _: &_| {
+                let converted: Vec<f32> =
+                    data.iter().map(|&s| s as f32 / 2_147_483_648.0).collect();
+                on_samples(&converted);
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &_| on_samples(data),
+            err_fn,
+            None,
+        )?,
+        fmt => return Err(anyhow::anyhow!("Unsupported sample format: {fmt}")),
+    };
+
+    stream.play()?;
+    Ok(stream)
+}
+
 pub fn init_audio_capture(
     device: &Device,
     config: SupportedStreamConfig,
@@ -126,58 +179,42 @@ pub fn init_audio_capture(
     let audio_buffer_clone = audio_buffer.clone();
 
     println!("init audio capture sample rate: {}", config.sample_rate());
-    
-    let err_fn = move |err| {
-        eprintln!("An error occurred during stream: {err}");
-    };
 
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::I8 => device.build_input_stream(
-            &config.into(),
-            move |data: &[i8], _: &_| {
-                let mut buffer = audio_buffer_clone.lock().unwrap();
-                buffer.extend(data.iter().map(|&sample| sample as f32 / 128.0));
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &config.into(),
-            move |data: &[i16], _: &_| {
-                let mut buffer = audio_buffer_clone.lock().unwrap();
-                buffer.extend(data.iter().map(|&sample| sample as f32 / 32768.0));
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I32 => device.build_input_stream(
-            &config.into(),
-            move |data: &[i32], _: &_| {
-                let mut buffer = audio_buffer_clone.lock().unwrap();
-                buffer.extend(data.iter().map(|&sample| sample as f32 / 2147483648.0));
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &config.into(),
-            move |data: &[f32], _: &_| {
-                let mut buffer = audio_buffer_clone.lock().unwrap();
-                buffer.extend(data.iter().copied());
-            },
-            err_fn,
-            None,
-        )?,
-        sample_format => {
-            return Err(anyhow::Error::msg(format!(
-                "Unsupported sample format: {sample_format}"
-            )));
-        }
-    };
-
-    stream.play()?;
+    let stream = build_input_stream_f32(device, config, move |samples| {
+        let mut buffer = audio_buffer_clone.lock().unwrap();
+        buffer.extend(samples.iter().copied());
+    })?;
 
     Ok((stream, audio_buffer))
+}
+
+pub fn init_loopback_capture(
+    device: &Device,
+    config: cpal::SupportedStreamConfig,
+    render_tx: SyncSender<Vec<f32>>,
+    channels: usize,
+) -> anyhow::Result<Stream> {
+    println!(
+        "init loopback capture sample rate: {} channels: {} format: {:?}",
+        config.sample_rate(),
+        config.channels(),
+        config.sample_format(),
+    );
+
+
+    let stream = build_input_stream_f32(device, config, move |samples| {
+        let mono: Vec<f32> = if channels == 1 {
+            samples.to_vec()
+        } else {
+            samples
+                .chunks_exact(channels)
+                .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+                .collect()
+        };
+        let _ = render_tx.try_send(mono);
+    })?;
+
+    Ok(stream)
 }
 
 pub fn run_vad_loop(
@@ -189,8 +226,11 @@ pub fn run_vad_loop(
     assistant_active: Arc<AtomicBool>,
     ctx: SharedContext,
 ) {
-	println!("[capture] channels={} sample_rate={}", channels, sample_rate); 
-	
+    println!(
+        "[capture] channels={} sample_rate={}",
+        channels, sample_rate
+    );
+
     let vad_chunk_duration_spec = 1;
     let pulse_chunk_duration_ms = 50;
     let overlap_duration = 0.15;
@@ -326,9 +366,9 @@ pub fn run_vad_loop(
             let current_state = State::from_u8(current_state_u8).unwrap_or(State::Idle);
 
             let threshold = if current_state == State::Speaking {
-                0.08
+                0.05
             } else {
-                0.015
+                0.05
             };
 
             if has_speech(&mono, threshold) {

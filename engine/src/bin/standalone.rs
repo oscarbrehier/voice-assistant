@@ -13,8 +13,8 @@ async fn main() -> anyhow::Result<()> {
         script_dir: PathBuf::from("engine/python"),
     };
 
-    match start_engine(paths, Some(3)).await {
-        Ok((tx, _stream)) => {
+    match start_engine(paths, Some(3), Some(0)).await {
+        Ok((tx, _stream, _loop_back_stream)) => {
             println!("engile started");
 
             let mut rx = tx.subscribe();

@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, TryRecvError},
+        mpsc::{Receiver, SyncSender, TryRecvError},
     },
     time::Duration,
 };
@@ -13,9 +13,9 @@ use aec3::voip::VoipAec3;
 use crate::audio::{capture::AudioBuffer, wav_dump::WavDump};
 
 const CAPTURE_RATE: u32 = 48_000;
-const RENDER_RATE: u32 = 24_000;
+const RENDER_RATE: u32 = 48_000;
 const CAPTURE_FRAME: usize = 480;
-const RENDER_FRAME: usize = 240;
+const RENDER_FRAME: usize = 480;
 
 pub fn run_aec_loop(
     running: Arc<AtomicBool>,
@@ -25,7 +25,7 @@ pub fn run_aec_loop(
     render_rx: Receiver<Vec<f32>>,
 ) {
     let mut aec = match VoipAec3::builder(CAPTURE_RATE as usize, 1, 1)
-        .render_sample_rate_hz(24_000)
+        .render_sample_rate_hz(48_000)
         .enable_high_pass(true)
         .enable_noise_suppression(true)
         .build()

@@ -1,42 +1,84 @@
+use cpal::traits::HostTrait;
 use rodio::DeviceTrait;
 use serde::Serialize;
 
-use crate::{State, audio::devices::{list_input_devices, select_device_by_index}, proactive::TriggerKind};
+use crate::{
+    State,
+    audio::devices::{list_devices, select_device_by_index},
+    proactive::TriggerKind,
+};
 
+pub mod aec;
 pub mod capture;
 pub mod devices;
+pub mod enrollment;
+pub mod onboarding;
 pub mod output;
 pub mod stt;
 pub mod tts;
 pub mod utils;
 pub mod voice;
-pub mod onboarding;
-pub mod enrollment;
-pub mod aec;
 pub mod wav_dump;
 
+pub struct AudioDeviceSelection {
+    pub input_device: cpal::Device,
+    pub input_config: cpal::SupportedStreamConfig,
+    pub loopback_device: cpal::Device,
+    pub loopback_config: cpal::SupportedStreamConfig,
+}
+
 pub fn setup_audio_device(
-    device_index: Option<usize>,
-) -> anyhow::Result<(cpal::Device, cpal::SupportedStreamConfig)> {
-    let device_list = list_input_devices().expect("failed to list devices");
-    for device in device_list.iter() {
-        println!("{} - {}", device.index, device.name);
+    input_device_index: Option<usize>,
+    output_device_index: Option<usize>,
+) -> anyhow::Result<AudioDeviceSelection> {
+    let host = cpal::default_host();
+
+    let input_devices: Vec<_> = host.input_devices()?.collect();
+    println!("-- input devices --");
+    for (i, d) in input_devices.iter().enumerate() {
+        let name = d
+            .description()
+            .map(|desc| desc.name().to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string());
+        println!("  [{}] {}", i, name);
     }
 
-    let selected_index = device_index.unwrap_or(0);
-    let device = select_device_by_index(&device_list, selected_index)
-        .expect("failed to get device")
-        .to_owned();
+    let input_index = input_device_index.unwrap_or(0);
+    let input_device = input_devices
+        .get(input_index)
+        .ok_or_else(|| anyhow::anyhow!("input device at {} out of range", input_index))?
+        .clone();
 
-    println!("using input device: {:?}", device.description());
+    let input_config = input_device
+        .default_input_config()
+        .map_err(|e| anyhow::anyhow!("failed to get input config: {}", e))?;
 
-    let config = if device.supports_input() {
-        device.default_input_config()
-    } else {
-        device.default_output_config()
+    let output_devices: Vec<_> = host.output_devices()?.collect();
+    println!("-- output devices (for loopback) --");
+    for (i, d) in output_devices.iter().enumerate() {
+        let name = d
+            .description()
+            .map(|desc| desc.name().to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string());
+        println!("  [{}] {}", i, name);
     }
-    .expect("failed to get default output/input config")
-    .to_owned();
 
-    Ok((device, config))
+    let output_idx = output_device_index.unwrap_or(0);
+    let loopback_device = output_devices
+        .get(output_idx)
+        .ok_or_else(|| anyhow::anyhow!("output device index {} out of range", output_idx))?
+        .clone();
+    let loopback_name = loopback_device.name().unwrap_or_default();
+    println!("using loopback device: {}", loopback_name);
+
+    let loopback_config = loopback_device
+        .default_output_config()
+        .map_err(|e| anyhow::anyhow!("failed to get output config for loopback: {}", e))?;
+
+    Ok(AudioDeviceSelection {
+        input_device,
+        input_config,
+        loopback_device,
+        loopback_config,
+    })
 }
