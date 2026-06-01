@@ -68,7 +68,10 @@ pub fn setup_audio_device(
         .get(output_idx)
         .ok_or_else(|| anyhow::anyhow!("output device index {} out of range", output_idx))?
         .clone();
-    let loopback_name = loopback_device.name().unwrap_or_default();
+    let loopback_name = loopback_device
+        .description()
+        .map(|desc| desc.name().to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
     println!("using loopback device: {}", loopback_name);
 
     let loopback_config = loopback_device

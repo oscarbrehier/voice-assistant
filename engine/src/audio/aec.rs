@@ -12,19 +12,19 @@ use aec3::voip::VoipAec3;
 
 use crate::audio::{capture::AudioBuffer, wav_dump::WavDump};
 
-const CAPTURE_RATE: u32 = 48_000;
-const RENDER_RATE: u32 = 48_000;
-const CAPTURE_FRAME: usize = 480;
-const RENDER_FRAME: usize = 480;
-
 pub fn run_aec_loop(
     running: Arc<AtomicBool>,
     raw_mic: AudioBuffer,
     mic_channels: usize,
     cleaned: AudioBuffer,
+    capture_rate: u32,
+    render_rate: u32,
     render_rx: Receiver<Vec<f32>>,
 ) {
-    let mut aec = match VoipAec3::builder(CAPTURE_RATE as usize, 1, 1)
+    let capture_frame = (capture_rate / 100) as usize;
+    let render_frame = (render_rate / 100) as usize;
+
+    let mut aec = match VoipAec3::builder(capture_rate as usize, 1, 1)
         .render_sample_rate_hz(48_000)
         .enable_high_pass(true)
         .enable_noise_suppression(true)
@@ -37,14 +37,14 @@ pub fn run_aec_loop(
         }
     };
 
-    let mut render_acc: VecDeque<f32> = VecDeque::with_capacity(RENDER_FRAME * 4);
-    let mut capture_acc: VecDeque<f32> = VecDeque::with_capacity(CAPTURE_FRAME * 4);
+    let mut render_acc: VecDeque<f32> = VecDeque::with_capacity(render_frame * 4);
+    let mut capture_acc: VecDeque<f32> = VecDeque::with_capacity(capture_frame * 4);
 
-    let mut out_frame = vec![0.0f32; CAPTURE_FRAME];
+    let mut out_frame = vec![0.0f32; capture_frame];
 
-    let raw_dump = Arc::new(WavDump::new("aec_raw.wav", CAPTURE_RATE).ok());
-    let render_dump = Arc::new(WavDump::new("aec_render.wav", RENDER_RATE).ok());
-    let cleaned_dump = Arc::new(WavDump::new("aec_cleaned.wav", CAPTURE_RATE).ok());
+    let raw_dump = Arc::new(WavDump::new("aec_raw.wav", capture_rate).ok());
+    let render_dump = Arc::new(WavDump::new("aec_render.wav", render_rate).ok());
+    let cleaned_dump = Arc::new(WavDump::new("aec_cleaned.wav", capture_rate).ok());
 
     while running.load(Ordering::SeqCst) {
         loop {
@@ -77,20 +77,20 @@ pub fn run_aec_loop(
             }
         }
 
-        while capture_acc.len() >= CAPTURE_FRAME {
-            let mut cap_frame = Vec::with_capacity(CAPTURE_FRAME);
-            for _ in 0..CAPTURE_FRAME {
+        while capture_acc.len() >= capture_frame {
+            let mut cap_frame = Vec::with_capacity(capture_frame);
+            for _ in 0..capture_frame {
                 cap_frame.push(capture_acc.pop_front().unwrap());
             }
 
-            let render_frame: Vec<f32> = if render_acc.len() >= RENDER_FRAME {
-                let mut rf = Vec::with_capacity(RENDER_FRAME);
-                for _ in 0..RENDER_FRAME {
+            let render_frame: Vec<f32> = if render_acc.len() >= render_frame {
+                let mut rf = Vec::with_capacity(render_frame);
+                for _ in 0..render_frame {
                     rf.push(render_acc.pop_front().unwrap());
                 }
                 rf
             } else {
-                vec![0.0; RENDER_FRAME]
+                vec![0.0; render_frame]
             };
 
             if let Some(d) = raw_dump.as_ref().as_ref() {

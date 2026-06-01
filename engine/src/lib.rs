@@ -145,6 +145,15 @@ pub async fn start_engine(
     let sample_rate = devices.input_config.sample_rate() as usize;
     let channels = devices.input_config.channels() as usize;
 
+    println!("[engine] mic device:      sample_rate={} channels={}", 
+        devices.input_config.sample_rate(), 
+        devices.input_config.channels()
+    );
+    println!("[engine] loopback device: sample_rate={} channels={}", 
+        devices.loopback_config.sample_rate(), 
+        devices.loopback_config.channels()
+    );
+
     let speaker_id = SpeakerID::new(
         "engine/models/voxceleb_ECAPA1024.onnx",
         Some("profiles/profile_1.bin"),
@@ -266,6 +275,8 @@ pub async fn start_engine(
     let aec_raw = audio_buffer.clone();
     let aec_cleaned = cleaned_audio_buffer.clone();
     let aec_mic_channels = channels;
+    let aec_capture_rate = devices.input_config.sample_rate();
+    let a
 
     let loopback_channels = devices.loopback_config.channels() as usize;
     let loopback_stream = init_loopback_capture(&devices.loopback_device, devices.loopback_config, aec_render_tx.clone(), loopback_channels)?;
