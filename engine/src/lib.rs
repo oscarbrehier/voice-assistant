@@ -192,19 +192,22 @@ pub async fn start_engine(
     });
 
     let vault_config = Arc::new(VaultConfig::new(PathBuf::from(&config.vault_path)));
+
+    let (stream, audio_buffer) =
+        init_audio_capture(&devices.input_device, devices.input_config.clone()).expect("failed to init audio capture");
+
+    let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
+    let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
+
     let llm_engine = LLMEngine::new(
         paths.config_dir,
         Arc::clone(&shared_memory),
         config.clone(),
         vault_config.clone(),
+        tts.clone(),
+        tx_internal.clone()
     )?;
-
-    let (stream, audio_buffer) =
-        init_audio_capture(&devices.input_device, devices.input_config).expect("failed to init audio capture");
-
-    let (tx_internal, rx_internal) = broadcast::channel::<Packet>(1024);
-    let (tx_external, _) = broadcast::channel::<EngineEvent>(1024);
-
+    
     let bridge_state = shared_context.engine_state.clone();
     let bridge_tx_ext = tx_external.clone();
     let mut bridge_rx_int = tx_internal.subscribe();
@@ -276,13 +279,13 @@ pub async fn start_engine(
     let aec_cleaned = cleaned_audio_buffer.clone();
     let aec_mic_channels = channels;
     let aec_capture_rate = devices.input_config.sample_rate();
-    let a
+    let aec_render_rate = devices.loopback_config.sample_rate();
 
     let loopback_channels = devices.loopback_config.channels() as usize;
     let loopback_stream = init_loopback_capture(&devices.loopback_device, devices.loopback_config, aec_render_tx.clone(), loopback_channels)?;
     
     std::thread::spawn(move || {
-        aec::run_aec_loop(aec_running, aec_raw, aec_mic_channels, aec_cleaned, aec_render_rx);
+        aec::run_aec_loop(aec_running, aec_raw, aec_mic_channels, aec_cleaned, aec_capture_rate, aec_render_rate, aec_render_rx);
     });
 
     let engine_tx = tx_internal.clone();

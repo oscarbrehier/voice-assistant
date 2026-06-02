@@ -8,13 +8,11 @@ use std::{
 use anyhow::Context;
 use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use tracing::instrument;
 
 use crate::{
-    Opt,
-    config::Config,
-    integrations::obsidian::VaultConfig,
-    llm::{
+    Opt, audio::tts::TTSService, config::Config, integrations::obsidian::VaultConfig, llm::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
@@ -28,10 +26,7 @@ use crate::{
             screen::LookAtScreen,
             time::GetTimeTool,
         },
-    },
-    memory::{MemoryManager, MemoryType},
-    state::SharedContext,
-    worker::Urgency,
+    }, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::{Packet, Urgency}
 };
 
 pub mod history;
@@ -48,6 +43,8 @@ pub struct LLMEngine {
     tools: ToolRegistry,
     memory: Arc<std::sync::Mutex<MemoryManager>>,
     vault_config: Arc<VaultConfig>,
+    tts: TTSService,
+    sender: broadcast::Sender<Packet>
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -146,6 +143,8 @@ impl LLMEngine {
         memory: Arc<std::sync::Mutex<MemoryManager>>,
         config: Config,
         vault_config: Arc<VaultConfig>,
+        tts: TTSService,
+        tx: broadcast::Sender<Packet>
     ) -> anyhow::Result<Self> {
         let prompts_dir = prompts_dir.as_ref().to_path_buf();
 
@@ -166,6 +165,8 @@ impl LLMEngine {
             memory,
             tools,
             vault_config,
+            tts,
+            sender: tx
         })
     }
 
@@ -307,10 +308,18 @@ impl LLMEngine {
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("No tool calls in response"))?;
 
-                    self.history.add_assistant_response(
-                        choice.message.content.clone(),
-                        Some(tool_calls.clone()),
-                    );
+                    let interim_content = choice.message.content.clone();
+
+                    self.history
+                        .add_assistant_response(interim_content.clone(), Some(tool_calls.clone()));
+
+                    if let Some(text) = interim_content.as_deref() {
+                        let trimmed = text.trim();
+
+                        if !trimmed.is_empty() {
+                        	let _ = self.tts.speak(trimmed, global_ctx.clone(), &self.sender, None, true);
+                        }
+                    }
 
                     for tool_call in tool_calls {
                         let tool_start = Instant::now();

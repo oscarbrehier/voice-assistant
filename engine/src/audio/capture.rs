@@ -201,7 +201,6 @@ pub fn init_loopback_capture(
         config.sample_format(),
     );
 
-
     let stream = build_input_stream_f32(device, config, move |samples| {
         let mono: Vec<f32> = if channels == 1 {
             samples.to_vec()
@@ -231,7 +230,6 @@ pub fn run_vad_loop(
         channels, sample_rate
     );
 
-    let vad_chunk_duration_spec = 1;
     let pulse_chunk_duration_ms = 50;
     let overlap_duration = 0.15;
 
@@ -386,19 +384,22 @@ pub fn run_vad_loop(
                     }
 
                     if is_enrolled {
-                        let candidate_audio = circular_buffer.get_all();
+                        ctx.audio_player.write().take();
+                        State::broadcast(State::Active, &ctx.engine_state, &tx);
 
-                        let mut speaker_lock = ctx.speaker.write();
-                        let is_authorized = speaker_lock
-                            .verify_with_negative_check(&candidate_audio, sample_rate)
-                            .unwrap_or(false);
+                        // let candidate_audio = circular_buffer.get_all();
 
-                        if is_authorized {
-                            ctx.audio_player.write().take();
-                            State::broadcast(State::Active, &ctx.engine_state, &tx);
-                        } else {
-                            continue;
-                        }
+                        // let mut speaker_lock = ctx.speaker.write();
+                        // let is_authorized = speaker_lock
+                        //     .verify_with_negative_check(&candidate_audio, sample_rate)
+                        //     .unwrap_or(false);
+
+                        // if is_authorized {
+                        //     ctx.audio_player.write().take();
+                        //     State::broadcast(State::Active, &ctx.engine_state, &tx);
+                        // } else {
+                        //     continue;
+                        // }
                     } else {
                         ctx.audio_player.write().take();
                         State::broadcast(State::Enrolling, &ctx.engine_state, &tx);
