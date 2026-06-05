@@ -63,3 +63,5 @@ Only save SPECIFIC, VERIFIABLE information.
 
 ## Relevant Memories (Contextual)
 {{retrieved_memories}}
+
+{{{{continuity_note}}}}

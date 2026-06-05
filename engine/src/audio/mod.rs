@@ -38,7 +38,12 @@ pub fn setup_audio_device(
     for (i, d) in input_devices.iter().enumerate() {
         let name = d
             .description()
-            .map(|desc| desc.name().to_string())
+            .map(|desc| {
+                desc.extended()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| desc.name().to_string())
+            })
             .unwrap_or_else(|_| "<unknown>".to_string());
         println!("  [{}] {}", i, name);
     }
@@ -58,7 +63,12 @@ pub fn setup_audio_device(
     for (i, d) in output_devices.iter().enumerate() {
         let name = d
             .description()
-            .map(|desc| desc.name().to_string())
+            .map(|desc| {
+                desc.extended()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| desc.name().to_string())
+            })
             .unwrap_or_else(|_| "<unknown>".to_string());
         println!("  [{}] {}", i, name);
     }

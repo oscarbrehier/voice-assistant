@@ -203,6 +203,8 @@ impl TTSService {
             State::broadcast(State::Speaking, &shared_context.engine_state, &sender);
         }
 
+        *shared_context.last_utterance_at.write() = Instant::now();
+
         let sentences = split_into_sentences(&text);
         if sentences.is_empty() {
             if !bypass_state_change {
@@ -233,6 +235,8 @@ impl TTSService {
         drop(tx);
 
         consumer.await??;
+
+        *shared_context.last_utterance_at.write() = Instant::now();
 
         if !bypass_state_change {
             let target_state = next_state.unwrap_or(State::Active);

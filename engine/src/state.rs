@@ -1,5 +1,5 @@
 use parking_lot::RwLock;
-use std::sync::{Arc, atomic::AtomicU8};
+use std::{sync::{Arc, atomic::{AtomicU8, AtomicU64}}, time::Instant};
 
 use serde::Serialize;
 
@@ -46,7 +46,8 @@ pub struct GlobalContext {
     pub speaker: RwLock<SpeakerID>,
     pub audio_devices: RwLock<AudioDevices>,
     pub cleaned_audio_buffer: AudioBuffer,
-    pub aec_render_tx: std::sync::mpsc::SyncSender<Vec<f32>>
+    pub aec_render_tx: std::sync::mpsc::SyncSender<Vec<f32>>,
+    pub last_utterance_at: RwLock<Instant>
 }
 
 impl GlobalContext {

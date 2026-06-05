@@ -25,7 +25,7 @@ pub fn run_aec_loop(
     let render_frame = (render_rate / 100) as usize;
 
     let mut aec = match VoipAec3::builder(capture_rate as usize, 1, 1)
-        .render_sample_rate_hz(48_000)
+        .render_sample_rate_hz(render_rate as usize)
         .enable_high_pass(true)
         .enable_noise_suppression(true)
         .build()
@@ -83,7 +83,7 @@ pub fn run_aec_loop(
                 cap_frame.push(capture_acc.pop_front().unwrap());
             }
 
-            let render_frame: Vec<f32> = if render_acc.len() >= render_frame {
+            let r_frame: Vec<f32> = if render_acc.len() >= render_frame {
                 let mut rf = Vec::with_capacity(render_frame);
                 for _ in 0..render_frame {
                     rf.push(render_acc.pop_front().unwrap());
@@ -97,10 +97,10 @@ pub fn run_aec_loop(
                 d.write_samples(&cap_frame);
             }
             if let Some(d) = render_dump.as_ref().as_ref() {
-                d.write_samples(&render_frame);
+                d.write_samples(&r_frame);
             }
 
-            match aec.process(&cap_frame, Some(&render_frame), false, &mut out_frame) {
+            match aec.process(&cap_frame, Some(&r_frame), false, &mut out_frame) {
                 Ok(_metrics) => {
                     if let Some(d) = cleaned_dump.as_ref().as_ref() {
                         d.write_samples(&out_frame);

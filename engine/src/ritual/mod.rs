@@ -20,6 +20,7 @@ use crate::{
 
 pub mod eligibility;
 pub mod theme;
+pub mod utils;
 
 pub struct RitualConfig {
     pub day_boundary_hour: u32,

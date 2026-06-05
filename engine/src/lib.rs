@@ -4,14 +4,14 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
-    },
+    }, time::Instant,
 };
 
 use clap::Parser;
 use cpal::Stream;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use parking_lot::RwLock;
+use parking_lot::{RwLock};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -41,11 +41,11 @@ pub mod integrations;
 pub mod llm;
 mod memory;
 pub mod monitor;
-mod proactive;
 pub mod ritual;
 pub mod state;
 mod utils;
 mod worker;
+mod proactive;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "")]
@@ -179,6 +179,7 @@ pub async fn start_engine(
         audio_devices,
         cleaned_audio_buffer: cleaned_audio_buffer.clone(),
         aec_render_tx: aec_render_tx.clone(),
+        last_utterance_at: RwLock::new(Instant::now())
     });
 
     let stt = STTService::new(paths.script_dir.clone()).await?;

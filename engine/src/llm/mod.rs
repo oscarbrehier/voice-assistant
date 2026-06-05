@@ -2,7 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -12,7 +12,11 @@ use tokio::sync::broadcast;
 use tracing::instrument;
 
 use crate::{
-    Opt, audio::tts::TTSService, config::Config, integrations::obsidian::VaultConfig, llm::{
+    Opt,
+    audio::tts::TTSService,
+    config::Config,
+    integrations::obsidian::VaultConfig,
+    llm::{
         history::ConversationHistory,
         mistral::{call_mistral_stateless, call_mistral_with_tools},
         tools::{
@@ -26,7 +30,11 @@ use crate::{
             screen::LookAtScreen,
             time::GetTimeTool,
         },
-    }, memory::{MemoryManager, MemoryType}, state::SharedContext, worker::{Packet, Urgency}
+    },
+    memory::{MemoryManager, MemoryType},
+    ritual::utils::continuity_note_for_gap,
+    state::SharedContext,
+    worker::{Packet, Urgency},
 };
 
 pub mod history;
@@ -44,7 +52,7 @@ pub struct LLMEngine {
     memory: Arc<std::sync::Mutex<MemoryManager>>,
     vault_config: Arc<VaultConfig>,
     tts: TTSService,
-    sender: broadcast::Sender<Packet>
+    sender: broadcast::Sender<Packet>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -144,7 +152,7 @@ impl LLMEngine {
         config: Config,
         vault_config: Arc<VaultConfig>,
         tts: TTSService,
-        tx: broadcast::Sender<Packet>
+        tx: broadcast::Sender<Packet>,
     ) -> anyhow::Result<Self> {
         let prompts_dir = prompts_dir.as_ref().to_path_buf();
 
@@ -166,7 +174,7 @@ impl LLMEngine {
             tools,
             vault_config,
             tts,
-            sender: tx
+            sender: tx,
         })
     }
 
@@ -244,13 +252,40 @@ impl LLMEngine {
 
         let vitals_str = global_ctx.get_vitals_snapshot();
 
-        let current_project = {
+        let (current_project, continuity_note) = {
             let lock = self
                 .memory
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Memory lock poisoned"))?;
-            lock.state_get("current_project")?
-                .unwrap_or("No active project".to_string())
+
+            let current_project = lock
+                .state_get("current_project")?
+                .unwrap_or("No active project".to_string());
+
+            let last = lock
+                .get_last_interaction()?
+                .and_then(|s| s.parse::<i64>().ok());
+
+            let continuity_note = match last {
+                Some(ts) => match chrono::DateTime::from_timestamp(ts, 0) {
+                    Some(last_dt_utc) => {
+                        let now_utc = chrono::Utc::now();
+
+                        let gap = match now_utc.signed_duration_since(last_dt_utc).to_std() {
+                            Ok(d) => d,
+                            Err(_) => {
+                                Duration::from_secs(0)
+                            }
+                        };
+
+                        continuity_note_for_gap(gap, chrono::Local::now())
+                    }
+                    None => String::new(),
+                },
+                None => String::new(),
+            };
+
+            (current_project, continuity_note)
         };
 
         let final_system_prompt = self
@@ -258,7 +293,8 @@ impl LLMEngine {
             .replace("{{vitals}}", &vitals_str)
             .replace("{{core_identity}}", &self.core_identity_cache)
             .replace("{{retrieved_memories}}", &situational_str)
-            .replace("{{current_project}}", &current_project);
+            .replace("{{current_project}}", &current_project)
+            .replace("{{continuity_note}}", &continuity_note);
 
         self.history.add_user_input(text);
         self.history.ensure_valid_start();
@@ -295,10 +331,19 @@ impl LLMEngine {
                     self.history
                         .add_assistant_response(Some(content.clone()), None);
 
+                    {
+                        let lock = self
+                            .memory
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("Memory lock poisoned"))?;
+                        lock.update_last_interaction()?;
+                    }
+
                     println!(
                         "generate complete, total_ms = {}",
                         overall_start.elapsed().as_millis()
                     );
+
                     return Ok(content);
                 }
                 "tool_calls" => {
@@ -317,7 +362,13 @@ impl LLMEngine {
                         let trimmed = text.trim();
 
                         if !trimmed.is_empty() {
-                        	let _ = self.tts.speak(trimmed, global_ctx.clone(), &self.sender, None, true);
+                            let _ = self.tts.speak(
+                                trimmed,
+                                global_ctx.clone(),
+                                &self.sender,
+                                None,
+                                true,
+                            );
                         }
                     }
 

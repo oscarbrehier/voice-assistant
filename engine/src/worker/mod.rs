@@ -1,16 +1,28 @@
-use std::{path::Path, sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-}};
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use serde::Serialize;
 use tokio::{sync::broadcast, task::JoinHandle};
 
 use crate::{
-    State, audio::{
+    State,
+    audio::{
         enrollment::handle_enrollment, stt::stt_service::STTService, tts::TTSService,
         utils::resample_to_16khz,
-    }, commands::CommandConfig, config::Config, llm::LLMEngine, memory::MemoryManager, proactive::TriggerKind, ritual::{self, RitualConfig}, state::SharedContext, worker::{proactive::process_proactive_trigger, speech::process_speech_logic}
+    },
+    commands::CommandConfig,
+    config::Config,
+    llm::LLMEngine,
+    memory::MemoryManager,
+    proactive::TriggerKind,
+    ritual::{self, RitualConfig},
+    state::SharedContext,
+    worker::{proactive::process_proactive_trigger, speech::process_speech_logic},
 };
 
 pub mod proactive;
@@ -25,6 +37,12 @@ pub enum Urgency {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub enum ProactiveContent {
+    Spoken(String),
+    LLMContext(String),
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", content = "content")]
 pub enum Packet {
     Pulse(Vec<f32>),
@@ -35,7 +53,7 @@ pub enum Packet {
     State(State),
     ProactiveTrigger {
         kind: TriggerKind,
-        context: String,
+        context: ProactiveContent,
         urgency: Urgency,
     },
     StartupRitual,
@@ -145,38 +163,10 @@ pub fn spawn_transcription_worker(
                                 continue;
                             }
 
-                            // let is_verified = {
-                            //     let mut handle = ctx.global_ctx.speaker.write();
-                            //     handle
-                            //         .verify_with_negative_check(&data, ctx.sample_rate)
-                            //         .unwrap_or(false)
-                            // };
-
-                            // if !is_verified {
-                            //     println!("Unauthorized speaker detected");
-                            //     State::broadcast(State::Idle, &ctx.global_ctx.engine_state, &tx);
-                            //     continue;
-                            // }
-
                             println!("Authorized speaker");
 
                             State::broadcast(State::Active, &ctx.global_ctx.engine_state, &tx);
                         }
-
-                        // if current_state == State::Active as u8 {
-                        //     let is_verified = {
-                        //         let mut handle = ctx.global_ctx.speaker.write();
-                        //         handle
-                        //             .verify_with_negative_check(&data, ctx.sample_rate)
-                        //             .unwrap_or(false)
-                        //     };
-
-                        //     if !is_verified {
-                        //         println!("Unauthorized speaker detected");
-                        //         State::broadcast(State::Idle, &ctx.global_ctx.engine_state, &tx);
-                        //         continue;
-                        //     }
-                        // }
 
                         let wake_word = ctx.config.name.to_lowercase();
                         let lower_t = transcription.to_lowercase();
@@ -211,7 +201,14 @@ pub fn spawn_transcription_worker(
                         continue;
                     }
 
-                    process_proactive_trigger(kind, context, urgency, &mut ctx, &tx).await;
+                    match context {
+                        ProactiveContent::LLMContext(content) => {
+                            process_proactive_trigger(kind, content, urgency, &mut ctx, &tx).await;
+                        }
+                        ProactiveContent::Spoken(content) => {
+                        	let _ = ctx.tts.speak(&content, ctx.global_ctx.clone(), &tx, Some(State::Idle), true);
+                        }
+                    }
                 }
                 Packet::StartupRitual => {
                     let config = RitualConfig {
@@ -223,9 +220,7 @@ pub fn spawn_transcription_worker(
                         fade_out_secs: 5.0,
                     };
 
-                    if let Err(e) =
-                        ritual::maybe_run_startup_ritual(config, &mut ctx, &tx).await
-                    {
+                    if let Err(e) = ritual::maybe_run_startup_ritual(config, &mut ctx, &tx).await {
                         eprintln!("Startup ritual error: {e}");
                     }
                 }

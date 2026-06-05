@@ -236,7 +236,8 @@ impl MemoryManager {
     }
 
     pub fn state_delete(&self, key: &str) -> anyhow::Result<bool> {
-        let rows = self.conn
+        let rows = self
+            .conn
             .execute("DELETE FROM engine_state WHERE key = ?", params![key])?;
         Ok(rows > 0)
     }
@@ -255,5 +256,16 @@ impl MemoryManager {
 
     pub fn state_set_timestamp(&self, key: &str, value: DateTime<Local>) -> anyhow::Result<()> {
         self.state_set(key, &value.to_rfc3339())
+    }
+
+    pub fn update_last_interaction(&self) -> anyhow::Result<()> {
+        let now_unix = chrono::Utc::now().timestamp();
+        self.state_set("last_interaction_at", &now_unix.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn get_last_interaction(&self) -> anyhow::Result<Option<String>> {
+        self.state_get("last_interaction_at")
     }
 }

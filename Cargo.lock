@@ -1742,6 +1742,7 @@ dependencies = [
  "num-traits",
  "ort",
  "parking_lot",
+ "rand 0.10.1",
  "regex",
  "reqwest",
  "rodio",
